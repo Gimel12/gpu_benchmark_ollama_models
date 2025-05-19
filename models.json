@@ -1,0 +1,52 @@
+{
+  "models": [
+    {
+      "name": "llama3:8b",
+      "description": "Meta's Llama 3 8B model"
+    },
+    {
+      "name": "llama3:70b",
+      "description": "Meta's Llama 3 70B model"
+    },
+    {
+      "name": "mistral:7b",
+      "description": "Mistral 7B model"
+    },
+    {
+      "name": "gemma:7b",
+      "description": "Google's Gemma 7B model"
+    },
+    {
+      "name": "phi3:14b",
+      "description": "Microsoft's Phi-3 14B model"
+    },
+    {
+      "name": "nemotron:70b",
+      "description": "Nemotron 70B model"
+    },
+    {
+      "name": "llama3.1:8b-instruct-fp16",
+      "description": "Meta's Llama 3.1 8B instruct model (FP16)"
+    },
+    {
+      "name": "gemma3:27b",
+      "description": "Google's Gemma 3 27B model"
+    },
+    {
+      "name": "gemma3:27b-it-fp16",
+      "description": "Google's Gemma 3 27B instruct-tuned model (FP16)"
+    },
+    {
+      "name": "llama3.2:1b",
+      "description": "Meta's Llama 3.2 1B model"
+    },
+    {
+      "name": "llama3.2:3b",
+      "description": "Meta's Llama 3.2 3B model"
+    },
+    {
+      "name": "qwen3:32b",
+      "description": "Qwen 3 32B model"
+    }
+  ]
+}
