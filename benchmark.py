@@ -185,7 +185,10 @@ def run_inference(
     env = os.environ.copy()
     if gpu_idx is not None:
         if platform.system() == "Linux":
+            # Set the specific GPU to use
             env["CUDA_VISIBLE_DEVICES"] = str(gpu_idx)
+            # Also set OLLAMA_USE_GPU=1 to ensure GPU usage
+            env["OLLAMA_USE_GPU"] = "1"
         elif platform.system() == "Darwin":
             # Apple Silicon doesn't need explicit GPU selection
             pass

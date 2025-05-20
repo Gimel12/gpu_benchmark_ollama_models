@@ -10,10 +10,49 @@
     <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
       <div class="container-fluid">
         <a class="navbar-brand" href="/">Ollama GPU Benchmark</a>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+          <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+          <ul class="navbar-nav">
+            <li class="nav-item">
+              <a class="nav-link" href="/">Home</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link active" href="/run">Run Benchmark</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" href="/results">Results</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" href="/history">History</a>
+            </li>
+          </ul>
+        </div>
       </div>
     </nav>
     <div class="container mt-5">
-      <h2>Configure and Run Benchmark</h2>
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h2>Configure and Run Benchmark</h2>
+        <a href="/presets" class="btn btn-outline-primary">Benchmark Presets</a>
+      </div>
+      
+      <!-- Progress Bar and Log Viewer (initially hidden) -->
+      <div id="progressSection" class="mb-4" style="display:none;">
+        <h4>Benchmark Progress</h4>
+        <div class="progress mb-3">
+          <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">0%</div>
+        </div>
+        <div class="card">
+          <div class="card-header d-flex justify-content-between align-items-center">
+            <span>Live Logs</span>
+            <button id="clearLogsBtn" class="btn btn-sm btn-outline-secondary">Clear</button>
+          </div>
+          <div class="card-body">
+            <pre id="logViewer" class="bg-dark text-light p-3" style="height: 300px; overflow-y: auto; font-size: 0.85rem; white-space: pre-wrap; word-break: break-word;"></pre>
+          </div>
+        </div>
+      </div>
       <form method="post" class="mt-4">
         {% if models and models|length > 0 %}
         <div class="mb-3">
@@ -22,7 +61,7 @@
             {% for m in models %}
             <div class="col-md-6">
               <div class="form-check">
-                <input class="form-check-input" type="checkbox" name="selected_models" value="{{ m.name }}" id="model_{{ loop.index0 }}">
+                <input class="form-check-input" type="checkbox" name="selected_models" value="{{ m.name }}" id="model_{{ loop.index0 }}" {% if m.name in form_data.selected_models %}checked{% endif %}>
                 <label class="form-check-label" for="model_{{ loop.index0 }}">
                   <strong>{{ m.name }}</strong> <span class="text-muted">{{ m.description }}</span>
                 </label>
@@ -47,19 +86,19 @@
         {% endif %}
         <div class="mb-3">
           <label for="prompt" class="form-label">Prompt</label>
-          <input type="text" class="form-control" id="prompt" name="prompt" placeholder="Write an essay about the USA revolution.">
+          <input type="text" class="form-control" id="prompt" name="prompt" placeholder="Write an essay about the USA revolution." value="{{ form_data.prompt }}">
         </div>
         <div class="mb-3">
           <label for="gpus" class="form-label">GPUs (indices, space-separated)</label>
-          <input type="text" class="form-control" id="gpus" name="gpus" placeholder="0 1">
+          <input type="text" class="form-control" id="gpus" name="gpus" placeholder="0 1" value="{{ form_data.gpus }}">
         </div>
         <div class="mb-3">
           <label for="runs" class="form-label">Runs per model per GPU</label>
-          <input type="number" class="form-control" id="runs" name="runs" value="1" min="1">
+          <input type="number" class="form-control" id="runs" name="runs" value="{{ form_data.runs }}" min="1">
         </div>
         <div class="mb-3">
           <label for="api_host" class="form-label">Ollama API Host</label>
-          <input type="text" class="form-control" id="api_host" name="api_host" placeholder="http://localhost:11434">
+          <input type="text" class="form-control" id="api_host" name="api_host" placeholder="http://localhost:11434" value="{{ form_data.api_host }}">
         </div>
         <button id="runBtn" type="submit" class="btn btn-success">Run Benchmark</button>
         <button id="stopBtn" type="button" class="btn btn-danger ms-2" style="display:none;">Stop Benchmark</button>
@@ -71,32 +110,185 @@
         </div>
       </form>
     </div>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script>
+      // UI Elements
       const form = document.querySelector('form');
       const runBtn = document.getElementById('runBtn');
       const stopBtn = document.getElementById('stopBtn');
       const spinnerBox = document.getElementById('spinnerBox');
+      const progressSection = document.getElementById('progressSection');
+      const progressBar = document.getElementById('progressBar');
+      const logViewer = document.getElementById('logViewer');
+      const clearLogsBtn = document.getElementById('clearLogsBtn');
+      
+      // State variables
       let running = false;
+      let logPollingInterval;
+      let lastLogLength = 0;
+      let seenLogs = new Set();
+      
+      // Progress tracking variables
+      let totalModels = 0;
+      let completedModels = 0;
+      let totalRuns = 0;
+      let completedRuns = 0;
+      
+      // Form submission - start benchmark
       form.addEventListener('submit', function(e) {
+        // Show UI elements for running state
         runBtn.disabled = true;
         spinnerBox.style.display = '';
         stopBtn.style.display = '';
-        running = true;
+        progressSection.style.display = '';
+        logViewer.textContent = '';
+        
+        // Reset progress tracking
+        lastLogLength = 0;
+        seenLogs.clear();
+        totalModels = 0;
+        completedModels = 0;
+        totalRuns = 0;
+        completedRuns = 0;
+        updateProgressBar(0);
+        
+        // Start polling for logs after a short delay
+        setTimeout(() => {
+          running = true;
+          startLogPolling();
+        }, 1000);
       });
+      
+      // Stop button click handler
       stopBtn.addEventListener('click', function() {
         fetch('/stop', {method: 'POST'})
           .then(() => {
-            spinnerBox.style.display = 'none';
-            stopBtn.style.display = 'none';
-            runBtn.disabled = false;
-            running = false;
-            alert('Benchmark stopped.');
-            window.location.href = '/results';
+            stopBenchmark('Benchmark stopped.');
           })
           .catch(() => {
             alert('Failed to stop benchmark.');
           });
       });
+      
+      // Clear logs button
+      clearLogsBtn.addEventListener('click', function() {
+        logViewer.textContent = '';
+      });
+      
+      // Start polling for logs
+      function startLogPolling() {
+        if (logPollingInterval) clearInterval(logPollingInterval);
+        
+        logPollingInterval = setInterval(() => {
+          if (!running) return;
+          
+          fetch('/progress')
+            .then(response => response.json())
+            .then(data => {
+              if (data.lines && data.lines.length > 0) {
+                updateLogs(data.lines);
+                updateProgress(data.lines);
+              }
+            })
+            .catch(error => console.error('Error fetching logs:', error));
+        }, 1000);
+      }
+      
+      // Update log viewer with new lines
+      function updateLogs(lines) {
+        // Filter out lines we've already seen
+        const newLines = lines.filter(line => !seenLogs.has(line));
+        
+        if (newLines.length > 0) {
+          // Add new lines to the log viewer
+          newLines.forEach(line => {
+            seenLogs.add(line);
+            const logLine = document.createElement('div');
+            logLine.textContent = line;
+            
+            // Add color based on content
+            if (line.includes('Error') || line.includes('error')) {
+              logLine.classList.add('text-danger');
+            } else if (line.includes('Benchmarking')) {
+              logLine.classList.add('text-info');
+            } else if (line.includes('completed')) {
+              logLine.classList.add('text-success');
+            }
+            
+            logViewer.appendChild(logLine);
+          });
+          
+          // Auto-scroll to bottom
+          logViewer.scrollTop = logViewer.scrollHeight;
+        }
+      }
+      
+      // Update progress based on log content
+      function updateProgress(lines) {
+        // Look for lines that indicate progress
+        for (const line of lines) {
+          // Detect total models and runs
+          if (line.includes('Using') && line.includes('models')) {
+            const match = line.match(/Using (\d+) models/);
+            if (match && match[1]) {
+              totalModels = parseInt(match[1], 10);
+              // Check if we have GPUs info to calculate total runs
+              const gpuMatch = lines.find(l => l.includes('Detected') && l.includes('GPU'));
+              if (gpuMatch) {
+                const gpuCountMatch = gpuMatch.match(/Detected (\d+)/);
+                if (gpuCountMatch && gpuCountMatch[1]) {
+                  const gpuCount = parseInt(gpuCountMatch[1], 10);
+                  // Find runs per model/GPU
+                  const runsLine = lines.find(l => l.includes('Run') && l.includes('/'));
+                  if (runsLine) {
+                    const runsMatch = runsLine.match(/Run \d+\/(\d+)/);
+                    if (runsMatch && runsMatch[1]) {
+                      const runsPerConfig = parseInt(runsMatch[1], 10);
+                      totalRuns = totalModels * gpuCount * runsPerConfig;
+                    }
+                  }
+                }
+              }
+            }
+          }
+          
+          // Detect completed runs
+          if (line.includes('Inference completed')) {
+            completedRuns++;
+            updateProgressBar(Math.min((completedRuns / totalRuns) * 100, 100));
+          }
+          
+          // Check for benchmark completion
+          if (line.includes('Results saved to')) {
+            // Wait a bit to show 100% before redirecting
+            updateProgressBar(100);
+            setTimeout(() => {
+              stopBenchmark();
+              window.location.href = '/results';
+            }, 1500);
+          }
+        }
+      }
+      
+      // Update the progress bar
+      function updateProgressBar(percent) {
+        const roundedPercent = Math.round(percent);
+        progressBar.style.width = `${roundedPercent}%`;
+        progressBar.setAttribute('aria-valuenow', roundedPercent);
+        progressBar.textContent = `${roundedPercent}%`;
+      }
+      
+      // Stop the benchmark and reset UI
+      function stopBenchmark(message) {
+        running = false;
+        if (logPollingInterval) clearInterval(logPollingInterval);
+        
+        spinnerBox.style.display = 'none';
+        stopBtn.style.display = 'none';
+        runBtn.disabled = false;
+        
+        if (message) alert(message);
+      }
     </script>
   </body>
 </html>

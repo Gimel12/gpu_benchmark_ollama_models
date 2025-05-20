@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>System Information</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+  </head>
+  <body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+      <div class="container-fluid">
+        <a class="navbar-brand" href="/">Ollama GPU Benchmark</a>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+          <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+          <ul class="navbar-nav">
+            <li class="nav-item">
+              <a class="nav-link" href="/">Home</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" href="/run">Run Benchmark</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" href="/results">Results</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" href="/history">History</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" href="/presets">Presets</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link active" href="/system">System Info</a>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </nav>
+    
+    <div class="container mt-5">
+      <h2>System Information</h2>
+      
+      <!-- System Overview -->
+      <div class="card mb-4">
+        <div class="card-header bg-primary text-white">
+          <h5 class="mb-0">System Overview</h5>
+        </div>
+        <div class="card-body">
+          <div class="row">
+            <div class="col-md-6">
+              <ul class="list-group">
+                <li class="list-group-item d-flex justify-content-between align-items-center">
+                  <span><strong>Operating System:</strong></span>
+                  <span>{{ system_info.platform }} {{ system_info.platform_version }}</span>
+                </li>
+                <li class="list-group-item d-flex justify-content-between align-items-center">
+                  <span><strong>Processor:</strong></span>
+                  <span>{{ system_info.processor }}</span>
+                </li>
+                <li class="list-group-item d-flex justify-content-between align-items-center">
+                  <span><strong>Python Version:</strong></span>
+                  <span>{{ system_info.python_version }}</span>
+                </li>
+              </ul>
+            </div>
+            <div class="col-md-6">
+              <ul class="list-group">
+                <li class="list-group-item d-flex justify-content-between align-items-center">
+                  <span><strong>Ollama Version:</strong></span>
+                  <span>{{ system_info.ollama_version }}</span>
+                </li>
+                <li class="list-group-item d-flex justify-content-between align-items-center">
+                  <span><strong>Ollama API:</strong></span>
+                  <span>
+                    {% if system_info.ollama_api_status %}
+                      <span class="badge bg-success">Available</span>
+                    {% else %}
+                      <span class="badge bg-danger">Unavailable</span>
+                    {% endif %}
+                  </span>
+                </li>
+                <li class="list-group-item d-flex justify-content-between align-items-center">
+                  <span><strong>Ollama GPU Support:</strong></span>
+                  <span>
+                    {% if system_info.ollama_gpu_support %}
+                      <span class="badge bg-success">Enabled</span>
+                    {% else %}
+                      <span class="badge bg-warning text-dark">Disabled</span>
+                    {% endif %}
+                  </span>
+                </li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- GPU Information -->
+      <div class="card mb-4">
+        <div class="card-header bg-success text-white">
+          <h5 class="mb-0">GPU Information</h5>
+        </div>
+        <div class="card-body">
+          {% if system_info.gpus %}
+            <div class="table-responsive">
+              <table class="table table-striped">
+                <thead>
+                  <tr>
+                    <th>Index</th>
+                    <th>Name</th>
+                    <th>Memory</th>
+                    <th>Driver</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for gpu in system_info.gpus %}
+                  <tr>
+                    <td>{{ gpu.index }}</td>
+                    <td>{{ gpu.name }}</td>
+                    <td>{{ gpu.memory }}</td>
+                    <td>{{ gpu.driver }}</td>
+                    <td>
+                      {% if gpu.available %}
+                        <span class="badge bg-success">Available</span>
+                      {% else %}
+                        <span class="badge bg-danger">Unavailable</span>
+                      {% endif %}
+                    </td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <div class="alert alert-warning">
+              <i class="bi bi-exclamation-triangle-fill me-2"></i>
+              <strong>No GPUs detected!</strong> Benchmarks will run on CPU, which will be significantly slower.
+            </div>
+            <div class="mt-3">
+              <h6>Possible reasons:</h6>
+              <ul>
+                <li>No compatible GPUs are installed in this system</li>
+                <li>GPU drivers are not installed or are outdated</li>
+                <li>Ollama is not configured to use GPU acceleration</li>
+              </ul>
+              
+              <div class="alert alert-info mt-3">
+                <h6>Recommendations:</h6>
+                <ol>
+                  <li>Check if your GPU is compatible with Ollama</li>
+                  <li>Ensure GPU drivers are properly installed</li>
+                  <li>Make sure Ollama is installed with GPU support</li>
+                  <li>Restart the Ollama service after installing GPU drivers</li>
+                </ol>
+              </div>
+            </div>
+          {% endif %}
+        </div>
+      </div>
+      
+      <!-- Available Models -->
+      <div class="card mb-4">
+        <div class="card-header bg-info text-white">
+          <h5 class="mb-0">Available Models</h5>
+        </div>
+        <div class="card-body">
+          {% if system_info.models %}
+            <div class="row">
+              {% for model in system_info.models %}
+                <div class="col-md-4 mb-3">
+                  <div class="card h-100">
+                    <div class="card-body">
+                      <h5 class="card-title">{{ model.name }}</h5>
+                      <p class="card-text text-muted">{{ model.size }}</p>
+                      <p class="card-text">
+                        <small class="text-muted">
+                          {% if model.modified %}
+                            Last updated: {{ model.modified }}
+                          {% endif %}
+                        </small>
+                      </p>
+                    </div>
+                    <div class="card-footer">
+                      <a href="/run?models={{ model.name }}" class="btn btn-sm btn-primary">Benchmark This Model</a>
+                    </div>
+                  </div>
+                </div>
+              {% endfor %}
+            </div>
+          {% else %}
+            <div class="alert alert-warning">
+              <i class="bi bi-exclamation-triangle-fill me-2"></i>
+              No models available. Please check your Ollama installation and make sure it's running.
+            </div>
+          {% endif %}
+        </div>
+      </div>
+      
+      <!-- System Diagnostics -->
+      <div class="card">
+        <div class="card-header bg-secondary text-white">
+          <h5 class="mb-0">System Diagnostics</h5>
+        </div>
+        <div class="card-body">
+          <div class="d-grid gap-2">
+            <button id="refreshBtn" class="btn btn-primary">
+              <i class="bi bi-arrow-clockwise me-2"></i>Refresh System Information
+            </button>
+            <button id="testGpuBtn" class="btn btn-success">
+              <i class="bi bi-gpu-card me-2"></i>Test GPU Inference
+            </button>
+            <button id="checkOllamaBtn" class="btn btn-info">
+              <i class="bi bi-check-circle me-2"></i>Check Ollama Status
+            </button>
+          </div>
+          
+          <div id="diagnosticResults" class="mt-3" style="display: none;">
+            <div class="card">
+              <div class="card-header">
+                <h6 class="mb-0">Diagnostic Results</h6>
+              </div>
+              <div class="card-body">
+                <pre id="diagnosticOutput" class="bg-dark text-light p-3" style="height: 200px; overflow-y: auto;"></pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+      // Refresh button
+      document.getElementById('refreshBtn').addEventListener('click', function() {
+        window.location.reload();
+      });
+      
+      // Test GPU inference
+      document.getElementById('testGpuBtn').addEventListener('click', function() {
+        const resultsDiv = document.getElementById('diagnosticResults');
+        const output = document.getElementById('diagnosticOutput');
+        
+        resultsDiv.style.display = 'block';
+        output.textContent = 'Running GPU test...\n';
+        
+        fetch('/test_gpu')
+          .then(response => response.json())
+          .then(data => {
+            output.textContent += data.output;
+          })
+          .catch(error => {
+            output.textContent += 'Error: ' + error;
+          });
+      });
+      
+      // Check Ollama status
+      document.getElementById('checkOllamaBtn').addEventListener('click', function() {
+        const resultsDiv = document.getElementById('diagnosticResults');
+        const output = document.getElementById('diagnosticOutput');
+        
+        resultsDiv.style.display = 'block';
+        output.textContent = 'Checking Ollama status...\n';
+        
+        fetch('/check_ollama')
+          .then(response => response.json())
+          .then(data => {
+            output.textContent += data.output;
+          })
+          .catch(error => {
+            output.textContent += 'Error: ' + error;
+          });
+      });
+    </script>
+  </body>
+</html>
