@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Ollama GPU Inference Benchmark Tool
+BIZON GPU Benchmark Tool
 
 This script benchmarks inference performance of various LLM models using Ollama
 across available GPUs on the system.
@@ -144,93 +144,145 @@ def pull_model(model_name: str) -> bool:
 def get_gpu_metrics_nvidia(gpu_idx: int) -> dict:
     """
     Collect GPU metrics using nvidia-smi for a specific GPU index.
-    Returns a dict with temperature, utilization, memory, and power.
+    Returns a dict with temperature, utilization, memory, power, and GPU name.
     Returns None if nvidia-smi is not available or fails.
     """
     try:
-        result = subprocess.run([
-            "nvidia-smi",
-            f"--query-gpu=temperature.gpu,utilization.gpu,memory.used,memory.total,power.draw",
-            "--format=csv,noheader,nounits",
-            f"-i", str(gpu_idx)
-        ], capture_output=True, text=True, check=True)
-        line = result.stdout.strip().split(',')
-        if len(line) != 5:
-            return None
-        temp_c = float(line[0])
-        util_percent = float(line[1])
-        mem_used = float(line[2])
-        mem_total = float(line[3])
-        mem_util_percent = (mem_used / mem_total) * 100 if mem_total > 0 else 0
-        power_w = float(line[4])
-        return {
-            "temperature_c": temp_c,
-            "utilization_percent": util_percent,
-            "memory_utilization_percent": mem_util_percent,
-            "power_draw_w": power_w
-        }
-    except Exception:
-        return None
+        # Run nvidia-smi to get GPU metrics
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                f"--query-gpu=name,temperature.gpu,utilization.gpu,utilization.memory,power.draw,power.limit",
+                "--format=csv,noheader,nounits",
+                f"--id={gpu_idx}"
+            ],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        
+        # Parse the output
+        values = result.stdout.strip().split(", ")
+        if len(values) >= 6:
+            return {
+                "gpu_name": values[0].strip(),
+                "temperature_c": float(values[1]),
+                "utilization_percent": float(values[2]),
+                "memory_utilization_percent": float(values[3]),
+                "power_draw_w": float(values[4]),
+                "power_limit_w": float(values[5])
+            }
+    except (subprocess.SubprocessError, ValueError, IndexError) as e:
+        print(f"Error getting GPU metrics: {e}")
+    
+    return None
 
 
 def run_inference(
     model_name: str,
     prompt: str,
-    gpu_idx: Optional[int] = None
+    gpu_idx: Optional[int] = None,
+    is_multi_gpu: bool = False,
+    gpu_list: List[int] = None
 ) -> Dict[str, Union[float, str, int]]:
     """
     Run inference on a model and measure performance, including GPU metrics if available.
     """
     # Set environment variables for GPU selection
     env = os.environ.copy()
-    if gpu_idx is not None:
+    
+    # Handle GPU selection
+    if is_multi_gpu and gpu_list:
+        # For multi-GPU mode, use the environment variables set in main()
+        # Just ensure OLLAMA_USE_GPU is set
+        env["OLLAMA_USE_GPU"] = "1"
+        print(f"Running inference on model {model_name} on multiple GPUs: {','.join(str(g) for g in gpu_list)}")
+    elif gpu_idx is not None:
         if platform.system() == "Linux":
             # Set the specific GPU to use
             env["CUDA_VISIBLE_DEVICES"] = str(gpu_idx)
             # Also set OLLAMA_USE_GPU=1 to ensure GPU usage
             env["OLLAMA_USE_GPU"] = "1"
+            print(f"Running inference on model {model_name} on GPU {gpu_idx}")
         elif platform.system() == "Darwin":
             # Apple Silicon doesn't need explicit GPU selection
-            pass
-
-    print(f"Running inference on model {model_name} {'on GPU ' + str(gpu_idx) if gpu_idx is not None else 'on CPU'}")
+            print(f"Running inference on model {model_name} on Apple Silicon GPU")
+    else:
+        print(f"Running inference on model {model_name} on CPU")
 
     # Prepare the request payload
     payload = {
         "model": model_name,
         "prompt": prompt,
-        "stream": False,
+        "stream": True,
         "options": {
-            "num_predict": 100  # Limit token generation for benchmarking
+            "num_predict": 10000  # Limit token generation for benchmarking
         }
     }
 
     # GPU metrics sampling (NVIDIA only)
     gpu_metrics_samples = []
-    sample_gpu_metrics = (gpu_idx is not None and platform.system() == "Linux")
-    try:
-        if sample_gpu_metrics:
-            m = get_gpu_metrics_nvidia(gpu_idx)
-            if m:
-                gpu_metrics_samples.append(m)
-    except Exception:
-        pass
+    
+    # Determine which GPUs to sample metrics from
+    gpus_to_sample = []
+    if is_multi_gpu and gpu_list:
+        # For multi-GPU mode, sample all GPUs in the list
+        gpus_to_sample = gpu_list
+    elif gpu_idx is not None:
+        # For single GPU mode, sample just that GPU
+        gpus_to_sample = [gpu_idx]
+    
+    # Sample metrics from all relevant GPUs
+    if platform.system() == "Linux" and gpus_to_sample:
+        try:
+            for idx in gpus_to_sample:
+                m = get_gpu_metrics_nvidia(idx)
+                if m:
+                    gpu_metrics_samples.append(m)
+        except Exception as e:
+            print(f"Error collecting GPU metrics: {e}")
 
     # Measure inference time
     start_time = time.time()
     try:
-        response = requests.post(f"{OLLAMA_API_HOST}/api/generate", json=payload)
-        response_json = response.json()
+        response = requests.post(f"{OLLAMA_API_HOST}/api/generate", json=payload, stream=payload.get("stream", False))
+        response_json = None
+        generated_text = ""
+        eval_count = 0
+        eval_duration = 0
+        if payload.get("stream", False):
+            # Handle streaming response
+            import json as _json
+            for line in response.iter_lines():
+                if line:
+                    chunk = _json.loads(line.decode("utf-8"))
+                    generated_text += chunk.get("response", "")
+                    if "eval_count" in chunk:
+                        eval_count = chunk["eval_count"]
+                    if "eval_duration" in chunk:
+                        eval_duration = chunk["eval_duration"]
+            response_json = {
+                "response": generated_text,
+                "eval_count": eval_count,
+                "eval_duration": eval_duration
+            }
+        else:
+            # Handle non-streaming response
+            response_json = response.json()
+            eval_count = response_json.get("eval_count", 0)
+            eval_duration = response_json.get("eval_duration", 0)
+        print("Ollama API response:", response_json)  # DEBUG
         end_time = time.time()
 
         # Sample GPU metrics again after inference
         try:
-            if sample_gpu_metrics:
-                m = get_gpu_metrics_nvidia(gpu_idx)
-                if m:
-                    gpu_metrics_samples.append(m)
-        except Exception:
-            pass
+            if platform.system() == "Linux" and gpus_to_sample:
+                for idx in gpus_to_sample:
+                    m = get_gpu_metrics_nvidia(idx)
+                    if m:
+                        gpu_metrics_samples.append(m)
+        except Exception as e:
+            print(f"Error collecting GPU metrics after inference: {e}")
 
         # Extract metrics
         total_duration = end_time - start_time
@@ -242,32 +294,42 @@ def run_inference(
         else:
             tokens_per_second = 0
 
-        # Average GPU metrics if collected
+        # Aggregate GPU metrics if available
         gpu_avg_metrics = None
         if gpu_metrics_samples:
-            arr = lambda key: [s[key] for s in gpu_metrics_samples if key in s]
+            avg_temp = sum(m.get("temperature_c", 0) for m in gpu_metrics_samples) / len(gpu_metrics_samples)
+            avg_util = sum(m.get("utilization_percent", 0) for m in gpu_metrics_samples) / len(gpu_metrics_samples)
+            avg_mem_util = sum(m.get("memory_utilization_percent", 0) for m in gpu_metrics_samples) / len(gpu_metrics_samples)
+            avg_power = sum(m.get("power_draw_w", 0) for m in gpu_metrics_samples) / len(gpu_metrics_samples)
+            max_power = max(m.get("power_limit_w", 0) for m in gpu_metrics_samples)  # Use TDP (power limit)
+            gpu_name = gpu_metrics_samples[0].get("gpu_name") if gpu_metrics_samples[0].get("gpu_name") else None
             gpu_avg_metrics = {
-                "avg_temperature_c": float(np.mean(arr("temperature_c"))) if arr("temperature_c") else None,
-                "avg_utilization_percent": float(np.mean(arr("utilization_percent"))) if arr("utilization_percent") else None,
-                "avg_memory_utilization_percent": float(np.mean(arr("memory_utilization_percent"))) if arr("memory_utilization_percent") else None,
-                "avg_power_draw_w": float(np.mean(arr("power_draw_w"))) if arr("power_draw_w") else None,
+                "gpu_name": gpu_name,
+                "avg_temperature_c": avg_temp,
+                "avg_utilization_percent": avg_util,
+                "avg_memory_utilization_percent": avg_mem_util,
+                "avg_power_draw_w": avg_power,
+                "max_power_w": max_power  # Rename to max_power_w for clarity
             }
 
         # Create result dictionary
+        tokens_generated = response_json.get("eval_count", 0)
         result = {
             "model": model_name,
-            "gpu_idx": gpu_idx,
+            "gpu_idx": gpu_idx if not is_multi_gpu else ",".join(str(g) for g in gpu_list) if gpu_list else None,
             "total_duration_seconds": total_duration,
             "eval_count": eval_count,
             "eval_duration_ns": eval_duration,
             "tokens_per_second": tokens_per_second,
+            "tokens_generated": tokens_generated,
             "timestamp": datetime.now().isoformat(),
             "prompt": prompt,
             "system_info": {
                 "platform": platform.system(),
                 "platform_version": platform.version(),
                 "processor": platform.processor()
-            }
+            },
+            "multi_gpu": is_multi_gpu
         }
         if gpu_avg_metrics:
             result["gpu_avg_metrics"] = gpu_avg_metrics
@@ -380,7 +442,7 @@ def load_models_from_json(json_file: str) -> List[str]:
 
 def main():
     global OLLAMA_API_HOST
-    parser = argparse.ArgumentParser(description="Ollama GPU Inference Benchmark Tool")
+    parser = argparse.ArgumentParser(description="BIZON GPU Benchmark Tool")
     parser.add_argument(
         "--models", 
         nargs="+", 
@@ -478,12 +540,34 @@ def main():
     
     # Run benchmarks
     results = []
-    for model in valid_models:
-        for gpu in gpus_to_use:
+    
+    # Check if we're using multiple GPUs
+    using_multiple_gpus = len(gpus_to_use) > 1 and all(gpu is not None for gpu in gpus_to_use)
+    
+    if using_multiple_gpus:
+        # For multiple GPUs, set CUDA_VISIBLE_DEVICES once with all GPUs
+        gpu_str = ",".join(str(gpu) for gpu in gpus_to_use)
+        print(f"\nUsing multiple GPUs: {gpu_str}")
+        
+        # Set environment variable for all processes
+        os.environ["CUDA_VISIBLE_DEVICES"] = gpu_str
+        os.environ["OLLAMA_USE_GPU"] = "1"
+        
+        # Run benchmarks on all GPUs
+        for model in valid_models:
             for run in range(args.runs):
-                print(f"\nBenchmarking {model} on {'GPU ' + str(gpu) if gpu is not None else 'CPU'} (Run {run+1}/{args.runs})")
-                result = run_inference(model, args.prompt, gpu)
+                print(f"\nBenchmarking {model} on GPUs {gpu_str} (Run {run+1}/{args.runs})")
+                # Pass None as gpu_idx to avoid overriding the environment variable
+                result = run_inference(model, args.prompt, None, is_multi_gpu=True, gpu_list=gpus_to_use)
                 results.append(result)
+    else:
+        # Single GPU mode (or CPU)
+        for model in valid_models:
+            for gpu in gpus_to_use:
+                for run in range(args.runs):
+                    print(f"\nBenchmarking {model} on {'GPU ' + str(gpu) if gpu is not None else 'CPU'} (Run {run+1}/{args.runs})")
+                    result = run_inference(model, args.prompt, gpu)
+                    results.append(result)
     
     # Save results
     save_results(results, args.output)

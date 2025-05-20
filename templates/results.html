@@ -11,7 +11,7 @@
   <body>
     <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
       <div class="container-fluid">
-        <a class="navbar-brand" href="/">Ollama GPU Benchmark</a>
+        <a class="navbar-brand" href="/">BIZON GPU Benchmark</a>
         <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
           <span class="navbar-toggler-icon"></span>
         </button>
@@ -60,13 +60,16 @@
               <tr>
                 <th>Model</th>
                 <th>GPU</th>
+                <th>GPU Name</th>
                 <th>Tokens/sec</th>
+                <th>Tokens Generated</th>
                 <th>Duration (s)</th>
                 <th>Prompt</th>
                 <th>Avg Temp (°C)</th>
                 <th>Avg Util (%)</th>
                 <th>Avg Mem (%)</th>
                 <th>Avg Power (W)</th>
+                <th>Max Power (W) (TDP)</th>
                 <th>Timestamp</th>
               </tr>
             </thead>
@@ -74,15 +77,24 @@
               {% for r in results %}
               <tr>
                 <td>{{ r.model }}</td>
-                <td>{{ r.gpu_idx if r.gpu_idx is not none else 'CPU' }}</td>
-                <td>{{ '%.2f' % r.tokens_per_second if r.tokens_per_second is defined else '' }}</td>
-                <td>{{ '%.2f' % r.total_duration_seconds if r.total_duration_seconds is defined else '' }}</td>
+                <td>
+                  {% if r.multi_gpu %}
+                    <span class="badge bg-info">Multi-GPU: {{ r.gpu_idx }}</span>
+                  {% else %}
+                    {{ r.gpu_idx }}
+                  {% endif %}
+                </td>
+                <td>{{ r.gpu_avg_metrics.gpu_name if r.gpu_avg_metrics and r.gpu_avg_metrics.gpu_name else '' }}</td>
+                <td>{{ r.tokens_per_second|round(2) if r.tokens_per_second else '' }}</td>
+                <td>{{ r.tokens_generated if r.tokens_generated is defined else 'N/A' }}</td>
+                <td>{{ r.total_duration_seconds|round(2) }}</td>
                 <td>{{ r.prompt }}</td>
-                <td>{{ '%.1f' % r.gpu_avg_metrics.avg_temperature_c if r.gpu_avg_metrics is defined and r.gpu_avg_metrics.avg_temperature_c is defined else '' }}</td>
-                <td>{{ '%.1f' % r.gpu_avg_metrics.avg_utilization_percent if r.gpu_avg_metrics is defined and r.gpu_avg_metrics.avg_utilization_percent is defined else '' }}</td>
-                <td>{{ '%.1f' % r.gpu_avg_metrics.avg_memory_utilization_percent if r.gpu_avg_metrics is defined and r.gpu_avg_metrics.avg_memory_utilization_percent is defined else '' }}</td>
-                <td>{{ '%.1f' % r.gpu_avg_metrics.avg_power_draw_w if r.gpu_avg_metrics is defined and r.gpu_avg_metrics.avg_power_draw_w is defined else '' }}</td>
-                <td>{% if r.timestamp %}{{ r.timestamp | format_timestamp }}{% endif %}</td>
+                <td>{{ r.gpu_avg_metrics.avg_temperature_c|round(1) if r.gpu_avg_metrics and r.gpu_avg_metrics.avg_temperature_c else '' }}</td>
+                <td>{{ r.gpu_avg_metrics.avg_utilization_percent|round(1) if r.gpu_avg_metrics and r.gpu_avg_metrics.avg_utilization_percent else '' }}</td>
+                <td>{{ r.gpu_avg_metrics.avg_memory_utilization_percent|round(1) if r.gpu_avg_metrics and r.gpu_avg_metrics.avg_memory_utilization_percent else '' }}</td>
+                <td>{{ r.gpu_avg_metrics.avg_power_draw_w|round(1) if r.gpu_avg_metrics and r.gpu_avg_metrics.avg_power_draw_w else '' }}</td>
+                <td>{{ r.gpu_avg_metrics.max_power_w if r.gpu_avg_metrics is defined and r.gpu_avg_metrics.max_power_w is defined else 'N/A' }}</td>
+                <td>{{ r.timestamp|format_timestamp }}</td>
               </tr>
               {% endfor %}
             </tbody>
