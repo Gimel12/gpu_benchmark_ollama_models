@@ -9,6 +9,7 @@ import uuid
 from threading import Thread, Lock
 from werkzeug.utils import secure_filename
 from datetime import datetime
+import requests
 
 # Import system info module
 from system_info import get_system_info, test_gpu_inference, check_ollama_status
@@ -36,6 +37,7 @@ benchmark_thread = None
 process_lock = Lock()
 
 LOG_FILE = "benchmark.log"
+INSTALL_LOG_FILE = "ollama_install.log"
 
 # --- Predefined presets ---
 PREDEFINED_PRESETS = {
@@ -76,6 +78,28 @@ def load_models():
             data = json.load(f)
         return data.get('models', [])
     return []
+
+# -------------------- Ollama helpers --------------------
+def ollama_installed() -> bool:
+    return shutil.which('ollama') is not None
+
+def ollama_api_ok(host: str = "http://localhost:11434") -> bool:
+    try:
+        resp = requests.get(f"{host}/api/tags", timeout=2)
+        return resp.status_code == 200
+    except Exception:
+        return False
+
+def start_ollama_daemon():
+    """Attempt to start ollama serve in the background if available."""
+    if not ollama_installed():
+        return
+    # Best-effort: start if not responding
+    if not ollama_api_ok():
+        try:
+            subprocess.Popen(['ollama', 'serve'], stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+        except Exception:
+            pass
 
 def load_presets():
     """Load user-defined benchmark presets"""
@@ -263,6 +287,82 @@ def run_benchmark():
         return redirect(url_for('results'))
     
     return render_template('run.html', models=models_list, form_data=form_data)
+
+# -------------------- Ollama install/status endpoints --------------------
+@app.route('/ollama/status')
+def ollama_status_simple():
+    """Lightweight status for front-end flow."""
+    version = "Not found"
+    if ollama_installed():
+        try:
+            out = subprocess.run(['ollama', 'version'], capture_output=True, text=True)
+            if out.returncode == 0:
+                version = out.stdout.strip()
+        except Exception:
+            pass
+    return jsonify({
+        'installed': ollama_installed(),
+        'api': ollama_api_ok(),
+        'version': version
+    })
+
+install_thread = None
+install_lock = Lock()
+
+def _run_install_script():
+    # Clear previous log
+    open(INSTALL_LOG_FILE, 'w').close()
+    with open(INSTALL_LOG_FILE, 'a') as lf:
+        lf.write('Starting Ollama installation...\n')
+        lf.flush()
+        cmd = ['/bin/bash', '-lc', 'curl -fsSL https://ollama.com/install.sh | sh']
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+            for line in proc.stdout:
+                lf.write(line)
+                lf.flush()
+            proc.wait()
+            lf.write(f"\nInstaller exit code: {proc.returncode}\n")
+            lf.flush()
+        except Exception as e:
+            lf.write(f"Error running installer: {e}\n")
+            lf.flush()
+    # Try to start daemon and verify
+    start_ollama_daemon()
+    # Give it a moment to start
+    try:
+        for _ in range(10):
+            if ollama_api_ok():
+                break
+            import time; time.sleep(1)
+    except Exception:
+        pass
+
+@app.route('/ollama/install', methods=['POST'])
+def ollama_install():
+    global install_thread
+    with install_lock:
+        if install_thread is not None and install_thread.is_alive():
+            return jsonify({'started': True})
+        install_thread = Thread(target=_run_install_script, daemon=True)
+        install_thread.start()
+    return jsonify({'started': True})
+
+@app.route('/ollama/install_progress')
+def ollama_install_progress():
+    try:
+        if not os.path.exists(INSTALL_LOG_FILE):
+            return jsonify({'lines': []})
+        with open(INSTALL_LOG_FILE, 'r') as f:
+            lines = [line.rstrip('\n') for line in f.readlines()[-200:]]
+        return jsonify({'lines': lines, 'installed': ollama_installed(), 'api': ollama_api_ok()})
+    except Exception:
+        return jsonify({'lines': []})
+
+@app.route('/ollama/start', methods=['POST'])
+def ollama_start():
+    start_ollama_daemon()
+    return jsonify({'api': ollama_api_ok()})
 
 @app.route('/progress')
 def progress():

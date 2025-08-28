@@ -3,13 +3,15 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Ollama GPU Benchmark</title>
+    <title>BIZON GPU Benchmark</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="{{ url_for('static', filename='styles.css') }}" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
   </head>
   <body>
-    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+    <nav class="navbar navbar-expand-lg navbar-dark app-navbar">
       <div class="container-fluid">
-        <a class="navbar-brand" href="/">Ollama GPU Benchmark</a>
+        <a class="navbar-brand" href="/">BIZON GPU Benchmark</a>
         <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
           <span class="navbar-toggler-icon"></span>
         </button>
@@ -32,11 +34,124 @@
       </div>
     </nav>
     <div class="container mt-5">
-      <div class="text-center">
-        <h1 class="display-4">Welcome to the Ollama GPU Benchmark Tool</h1>
+      <div class="text-center hero">
+        <h1 class="display-4">Welcome to the BIZON GPU Benchmark Tool</h1>
         <p class="lead">Benchmark LLM models and analyze GPU performance with ease.</p>
-        <a href="/run" class="btn btn-primary btn-lg mt-4">Run a Benchmark</a>
+        <button id="runWizardBtn" class="btn btn-primary btn-lg mt-4">Run a Benchmark</button>
       </div>
     </div>
+
+    <!-- How-to video placeholder -->
+    <div class="container mt-4">
+      <div class="card video-card mx-auto" style="max-width: 960px;">
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-center mb-3">
+            <h5 class="mb-0"></h5>
+          </div>
+          <div class="video-embed">
+            <iframe src="https://www.youtube.com/embed/SKkwldd_LiM?rel=0" title="BIZON GPU Benchmark - How To" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <footer class="app-footer mt-5 py-4">
+      <div class="container text-center text-muted small">
+        BIZON-TECH copyright 2025
+      </div>
+    </footer>
+
+    <!-- Ollama Setup Modal -->
+    <div class="modal fade" id="setupModal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">Preparing Your Environment</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body">
+            <div class="d-flex gap-3 align-items-center mb-3">
+              <span class="badge bg-secondary" id="badgeInstalled">Ollama: checking…</span>
+              <span class="badge bg-secondary" id="badgeAPI">API: checking…</span>
+            </div>
+            <div class="small text-muted mb-2">We will install Ollama if needed using: curl -fsSL https://ollama.com/install.sh | sh</div>
+            <pre id="setupLog" class="bg-light p-3 rounded" style="height: 240px; overflow:auto; white-space:pre-wrap;"></pre>
+          </div>
+          <div class="modal-footer">
+            <button id="cancelSetupBtn" type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+            <button id="continueBtn" type="button" class="btn btn-success" disabled>Continue</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const runBtn = document.getElementById('runWizardBtn');
+      const setupModal = new bootstrap.Modal(document.getElementById('setupModal'));
+      const logEl = document.getElementById('setupLog');
+      const badgeInstalled = document.getElementById('badgeInstalled');
+      const badgeAPI = document.getElementById('badgeAPI');
+      const continueBtn = document.getElementById('continueBtn');
+
+      function setBadge(el, okText, ok){
+        el.className = 'badge ' + (ok ? 'bg-success' : 'bg-danger');
+        el.textContent = okText + (ok ? ' ✓' : ' ✗');
+      }
+
+      async function checkStatus(){
+        const r = await fetch('/ollama/status');
+        const j = await r.json();
+        setBadge(badgeInstalled, 'Ollama ' + (j.version || ''), j.installed);
+        setBadge(badgeAPI, 'API', j.api);
+        return j;
+      }
+
+      let progressTimer = null;
+      async function startInstall(){
+        logEl.textContent += 'Starting install...\n';
+        await fetch('/ollama/install', {method:'POST'});
+        progressTimer = setInterval(async ()=>{
+          const r = await fetch('/ollama/install_progress');
+          const j = await r.json();
+          logEl.textContent = j.lines.join('\n');
+          logEl.scrollTop = logEl.scrollHeight;
+          setBadge(badgeInstalled, 'Ollama', j.installed);
+          setBadge(badgeAPI, 'API', j.api);
+          if (j.installed && j.api){
+            clearInterval(progressTimer);
+            continueBtn.disabled = false;
+          }
+        }, 1500);
+      }
+
+      async function ensureReady(){
+        logEl.textContent = '';
+        continueBtn.disabled = true;
+        setupModal.show();
+        const s = await checkStatus();
+        if (s.installed && s.api){
+          continueBtn.disabled = false;
+          return;
+        }
+        if (s.installed && !s.api){
+          logEl.textContent += 'Ollama installed but API not responding. Attempting to start...\n';
+          await fetch('/ollama/start', {method:'POST'});
+          const again = await checkStatus();
+          if (again.api){
+            continueBtn.disabled = false;
+            return;
+          }
+        }
+        await startInstall();
+      }
+
+      runBtn.addEventListener('click', async ()=>{
+        await ensureReady();
+      });
+
+      continueBtn.addEventListener('click', ()=>{
+        window.location.href = '/run';
+      });
+    </script>
   </body>
 </html>
