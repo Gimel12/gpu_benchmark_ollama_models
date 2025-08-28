@@ -10,6 +10,7 @@ from threading import Thread, Lock
 from werkzeug.utils import secure_filename
 from datetime import datetime
 import requests
+import signal
 
 # Import system info module
 from system_info import get_system_info, test_gpu_inference, check_ollama_status
@@ -292,12 +293,15 @@ def run_benchmark():
 @app.route('/ollama/status')
 def ollama_status_simple():
     """Lightweight status for front-end flow."""
-    version = "Not found"
+    version = ""
     if ollama_installed():
         try:
-            out = subprocess.run(['ollama', 'version'], capture_output=True, text=True)
-            if out.returncode == 0:
-                version = out.stdout.strip()
+            # Try several common flags for version output
+            for cmd in (["ollama", "version"], ["ollama", "--version"], ["ollama", "-v"]):
+                out = subprocess.run(cmd, capture_output=True, text=True)
+                if out.returncode == 0 and out.stdout.strip():
+                    version = out.stdout.strip()
+                    break
         except Exception:
             pass
     return jsonify({
@@ -306,8 +310,29 @@ def ollama_status_simple():
         'version': version
     })
 
+@app.route('/ollama/installed_models')
+def ollama_installed_models():
+    """Return a list of installed model tags from the local Ollama API."""
+    models = []
+    if ollama_api_ok():
+        try:
+            resp = requests.get("http://localhost:11434/api/tags", timeout=3)
+            if resp.ok:
+                data = resp.json() or {}
+                for m in data.get('models', []) or []:
+                    name = m.get('name') or m.get('tag') or ''
+                    if name:
+                        models.append(name)
+        except Exception:
+            pass
+    return jsonify({'models': models})
+
 install_thread = None
 install_lock = Lock()
+pull_proc = None
+pull_lock = Lock()
+PULL_LOG_FILE = "ollama_pull.log"
+current_pull_model = None
 
 def _run_install_script():
     # Clear previous log
@@ -317,10 +342,51 @@ def _run_install_script():
         lf.flush()
         cmd = ['/bin/bash', '-lc', 'curl -fsSL https://ollama.com/install.sh | sh']
         try:
+            import time
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
-            for line in proc.stdout:
-                lf.write(line)
-                lf.flush()
+
+            last_update = time.time()
+            hint_written = False
+
+            def maybe_write_hint():
+                nonlocal hint_written
+                # Write a one-time hint if inactivity suggests sudo prompt
+                if not hint_written:
+                    lf.write("\n___NEED_SUDO___\n")
+                    lf.write("No progress detected for a while. The installer may be waiting for sudo/password input.\n")
+                    lf.write("If this machine requires sudo for /usr/local installs, please run the command below in a terminal, then click 'Run a Benchmark' again:\n")
+                    lf.write("  curl -fsSL https://ollama.com/install.sh | sh\n\n")
+                    lf.flush()
+                    hint_written = True
+
+            # Reader loop with inactivity checks
+            while True:
+                line = proc.stdout.readline()
+                if line:
+                    lf.write(line)
+                    lf.flush()
+                    last_update = time.time()
+                    # check for permission-related errors that imply sudo
+                    lower = line.lower()
+                    if any(pat in lower for pat in (
+                        'permission denied',
+                        'operation not permitted',
+                        'read-only file system',
+                        'not writable',
+                        'rm: cannot remove',
+                        '/usr/local/'
+                    )):
+                        maybe_write_hint()
+                elif proc.poll() is not None:
+                    break
+                else:
+                    # no new data; check inactivity
+                    if time.time() - last_update > 8:
+                        maybe_write_hint()
+                        # extend threshold so we don't spam
+                        last_update = time.time()
+                    time.sleep(0.5)
+
             proc.wait()
             lf.write(f"\nInstaller exit code: {proc.returncode}\n")
             lf.flush()
@@ -352,17 +418,151 @@ def ollama_install():
 def ollama_install_progress():
     try:
         if not os.path.exists(INSTALL_LOG_FILE):
-            return jsonify({'lines': []})
+            return jsonify({'lines': [], 'need_sudo': False, 'installed': ollama_installed(), 'api': ollama_api_ok()})
         with open(INSTALL_LOG_FILE, 'r') as f:
             lines = [line.rstrip('\n') for line in f.readlines()[-200:]]
-        return jsonify({'lines': lines, 'installed': ollama_installed(), 'api': ollama_api_ok()})
+        need_sudo = any('___NEED_SUDO___' in ln for ln in lines)
+        # Filter sentinel from user-facing log
+        filtered = [ln for ln in lines if '___NEED_SUDO___' not in ln]
+        return jsonify({'lines': filtered, 'installed': ollama_installed(), 'api': ollama_api_ok(), 'need_sudo': need_sudo})
     except Exception:
-        return jsonify({'lines': []})
+        return jsonify({'lines': [], 'need_sudo': False})
 
 @app.route('/ollama/start', methods=['POST'])
 def ollama_start():
     start_ollama_daemon()
     return jsonify({'api': ollama_api_ok()})
+
+@app.route('/ollama/install_sudo', methods=['POST'])
+def ollama_install_sudo():
+    """Run the installer with sudo using a password sent from the client.
+    Security precautions:
+    - Password is only read from JSON body and written to sudo stdin.
+    - Never logged or stored; variable is cleared immediately after use.
+    - Short timeout to avoid hanging.
+    """
+    data = request.get_json(silent=True) or {}
+    password = data.get('password', '')
+    if not isinstance(password, str) or not password:
+        return jsonify({'started': False, 'error': 'Missing password'}), 400
+
+    # Clear previous log and write a header
+    open(INSTALL_LOG_FILE, 'w').close()
+    with open(INSTALL_LOG_FILE, 'a') as lf:
+        lf.write('Starting Ollama installation with sudo...\n')
+        lf.flush()
+
+    cmd = ['/bin/bash', '-lc', "sudo -S -k bash -lc 'curl -fsSL https://ollama.com/install.sh | sh'"]
+    try:
+        import time
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+
+        # Feed password once; avoid storing beyond this scope
+        try:
+            proc.stdin.write(password + "\n")
+            proc.stdin.flush()
+        except Exception:
+            pass
+        finally:
+            # Erase password variable
+            password = ''
+
+        # Stream output to log with masking
+        start_time = time.time()
+        TIMEOUT = 300  # 5 minutes max
+        with open(INSTALL_LOG_FILE, 'a') as lf:
+            while True:
+                if proc.poll() is not None:
+                    break
+                line = proc.stdout.readline()
+                if line:
+                    low = line.lower()
+                    # mask any sudo prompt lines
+                    if 'password' in low:
+                        line = '[sudo] password prompt...\n'
+                    lf.write(line)
+                    lf.flush()
+                if time.time() - start_time > TIMEOUT:
+                    # kill process group to avoid zombies
+                    try:
+                        proc.send_signal(signal.SIGTERM)
+                    except Exception:
+                        pass
+                    lf.write('\nInstaller timed out.\n')
+                    lf.flush()
+                    break
+            proc.wait(timeout=5)
+            lf.write(f"\nInstaller exit code: {proc.returncode}\n")
+            lf.flush()
+
+        # Attempt to start daemon
+        start_ollama_daemon()
+        return jsonify({'started': True})
+    except Exception as e:
+        with open(INSTALL_LOG_FILE, 'a') as lf:
+            lf.write(f"Error running sudo installer: {e}\n")
+        return jsonify({'started': False, 'error': 'installer_failed'}), 500
+
+# -------------------- Ollama pull endpoints --------------------
+@app.route('/ollama/pull', methods=['POST'])
+def ollama_pull():
+    global pull_proc, current_pull_model
+    data = request.get_json(silent=True) or {}
+    model = (data.get('model') or '').strip()
+    if not model:
+        return jsonify({'started': False, 'error': 'missing_model'}), 400
+    with pull_lock:
+        if pull_proc is not None and pull_proc.poll() is None:
+            return jsonify({'started': False, 'error': 'already_running'}), 409
+        # Clear previous pull log and start process
+        open(PULL_LOG_FILE, 'w').close()
+        current_pull_model = model
+        try:
+            pull_proc = subprocess.Popen(
+                ['ollama', 'pull', model],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
+            )
+        except FileNotFoundError:
+            return jsonify({'started': False, 'error': 'ollama_not_found'}), 500
+
+        def stream_pull():
+            with open(PULL_LOG_FILE, 'a') as lf:
+                for line in pull_proc.stdout:
+                    lf.write(line)
+                    lf.flush()
+            pull_proc.wait()
+            # After pull, try to refresh daemon and status
+            start_ollama_daemon()
+
+        t = Thread(target=stream_pull, daemon=True)
+        t.start()
+        return jsonify({'started': True})
+
+@app.route('/ollama/pull_progress')
+def ollama_pull_progress():
+    try:
+        if not os.path.exists(PULL_LOG_FILE):
+            return jsonify({'lines': [], 'running': False, 'done': False, 'success': False, 'model': current_pull_model, 'installed': ollama_installed(), 'api': ollama_api_ok()})
+        with open(PULL_LOG_FILE, 'r') as f:
+            lines = [ln.rstrip('\n') for ln in f.readlines()[-200:]]
+        running = False
+        with pull_lock:
+            running = pull_proc is not None and pull_proc.poll() is None
+            rc = None if running else (pull_proc.returncode if pull_proc is not None else None)
+        success = (rc == 0)
+        return jsonify({'lines': lines, 'running': running, 'done': not running and rc is not None, 'success': success, 'model': current_pull_model, 'installed': ollama_installed(), 'api': ollama_api_ok()})
+    except Exception:
+        return jsonify({'lines': [], 'running': False, 'done': False, 'success': False, 'model': current_pull_model})
 
 @app.route('/progress')
 def progress():
@@ -556,6 +756,145 @@ def export_csv(filename):
         mimetype="text/csv",
         headers={"Content-Disposition": f"attachment;filename=benchmark_results_{timestamp}.csv"}
     )
+
+@app.route('/gpu/metrics')
+def gpu_metrics():
+    """Return realtime GPU metrics from nvidia-smi.
+    Fields: index, name, utilization_percent, memory_used_mib, memory_total_mib,
+    temperature_c, power_draw_w, power_limit_w
+    """
+    try:
+        # Query without units; returns one row per GPU
+        cmd = [
+            'nvidia-smi',
+            '--query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw,power.limit',
+            '--format=csv,noheader,nounits'
+        ]
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
+        if out.returncode != 0:
+            return jsonify({'gpus': [], 'error': out.stderr.strip()}), 200
+        gpus = []
+        for line in out.stdout.strip().split('\n'):
+            if not line:
+                continue
+            parts = [p.strip() for p in line.split(',')]
+            if len(parts) < 8:
+                continue
+            try:
+                gpus.append({
+                    'index': int(parts[0]),
+                    'name': parts[1],
+                    'utilization_percent': float(parts[2]),
+                    'memory_used_mib': float(parts[3]),
+                    'memory_total_mib': float(parts[4]),
+                    'temperature_c': float(parts[5]),
+                    'power_draw_w': float(parts[6]) if parts[6] not in ('N/A', '') else None,
+                    'power_limit_w': float(parts[7]) if parts[7] not in ('N/A', '') else None,
+                })
+            except Exception:
+                continue
+        return jsonify({'gpus': gpus})
+    except FileNotFoundError:
+        return jsonify({'gpus': [], 'error': 'nvidia-smi not found'}), 200
+    except Exception as e:
+        return jsonify({'gpus': [], 'error': str(e)}), 200
+
+@app.route('/gpu/list')
+def gpu_list():
+    """List GPUs with power limit metadata for the Advanced tab."""
+    try:
+        cmd = [
+            'nvidia-smi',
+            '--query-gpu=index,name,power.limit,power.max_limit,power.default_limit',
+            '--format=csv,noheader,nounits'
+        ]
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
+        if out.returncode != 0:
+            return jsonify({'gpus': [], 'error': out.stderr.strip()}), 200
+        gpus = []
+        for line in out.stdout.strip().split('\n'):
+            if not line:
+                continue
+            parts = [p.strip() for p in line.split(',')]
+            if len(parts) < 5:
+                continue
+            def f(v):
+                try:
+                    return float(v)
+                except Exception:
+                    return None
+            gpus.append({
+                'index': int(parts[0]),
+                'name': parts[1],
+                'power_limit_w': f(parts[2]),
+                'power_max_limit_w': f(parts[3]),
+                'power_default_limit_w': f(parts[4]),
+            })
+        return jsonify({'gpus': gpus})
+    except FileNotFoundError:
+        return jsonify({'gpus': [], 'error': 'nvidia-smi not found'}), 200
+    except Exception as e:
+        return jsonify({'gpus': [], 'error': str(e)}), 200
+
+@app.route('/gpu/settings_apply', methods=['POST'])
+def gpu_settings_apply():
+    """Apply basic GPU settings: power limit and persistence mode.
+    Requires appropriate permissions; returns stderr in case of failure.
+    Body JSON: { index: int, power_limit_w?: number, persistence?: '1'|'0' }
+    """
+    data = request.get_json(silent=True) or {}
+    try:
+        idx = int(data.get('index'))
+    except Exception:
+        return jsonify({'ok': False, 'error': 'invalid_index'}), 400
+    power_limit = data.get('power_limit_w', None)
+    persistence = data.get('persistence', None)
+    outputs = []
+    try:
+        if power_limit is not None and str(power_limit).strip() != '':
+            cmd_pl = ['nvidia-smi', '-i', str(idx), '-pl', str(int(float(power_limit)))]
+            r = subprocess.run(cmd_pl, capture_output=True, text=True)
+            outputs.append({'cmd': ' '.join(cmd_pl), 'rc': r.returncode, 'stdout': r.stdout, 'stderr': r.stderr})
+            if r.returncode != 0:
+                return jsonify({'ok': False, 'step': 'power_limit', 'detail': r.stderr.strip()}), 200
+        if persistence in ('0','1'):
+            state = 'ENABLED' if persistence == '1' else 'DISABLED'
+            cmd_pm = ['nvidia-smi', '-i', str(idx), '-pm', state]
+            r = subprocess.run(cmd_pm, capture_output=True, text=True)
+            outputs.append({'cmd': ' '.join(cmd_pm), 'rc': r.returncode, 'stdout': r.stdout, 'stderr': r.stderr})
+            if r.returncode != 0:
+                return jsonify({'ok': False, 'step': 'persistence', 'detail': r.stderr.strip()}), 200
+        return jsonify({'ok': True, 'steps': outputs})
+    except FileNotFoundError:
+        return jsonify({'ok': False, 'error': 'nvidia-smi not found'}), 200
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 200
+
+@app.route('/gpu/settings_reset', methods=['POST'])
+def gpu_settings_reset():
+    """Reset power limit to GPU default limit for given index."""
+    data = request.get_json(silent=True) or {}
+    try:
+        idx = int(data.get('index'))
+    except Exception:
+        return jsonify({'ok': False, 'error': 'invalid_index'}), 400
+    try:
+        # Read default limit
+        out = subprocess.run([
+            'nvidia-smi', '--query-gpu=power.default_limit', '--format=csv,noheader,nounits', '-i', str(idx)
+        ], capture_output=True, text=True)
+        if out.returncode != 0:
+            return jsonify({'ok': False, 'error': out.stderr.strip()}), 200
+        default_w = out.stdout.strip().split('\n')[0].strip()
+        # Apply default
+        r = subprocess.run(['nvidia-smi', '-i', str(idx), '-pl', default_w], capture_output=True, text=True)
+        if r.returncode != 0:
+            return jsonify({'ok': False, 'error': r.stderr.strip()}), 200
+        return jsonify({'ok': True, 'power_limit_w': float(default_w)})
+    except FileNotFoundError:
+        return jsonify({'ok': False, 'error': 'nvidia-smi not found'}), 200
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 200
 
 @app.route('/download')
 def download():

@@ -1,42 +1,71 @@
 # Ollama GPU Inference Benchmark Tool
 
-This tool benchmarks inference performance of various LLM models using Ollama across available GPUs on your system.
+Web application for benchmarking inference performance of Ollama models across your GPUs, with a built‑in real‑time GPU monitor and basic advanced GPU controls.
 
 ## Features
 
-- Automatically detects available GPUs (NVIDIA, AMD, or Apple Silicon)
-- Downloads models from Ollama if not already available
-- Runs inference with a specified prompt
-- Measures and reports performance metrics (tokens/second)
-- Supports running on multiple GPUs
-- Saves detailed benchmark results to a JSON file
+- __Web UI__: Simple two‑pane interface to select models, configure run settings, and view results.
+- __Model management__: Shows available models and whether they’re installed; one‑click install from the UI.
+- __Run Settings__: Configure prompt, GPU indices, runs per model, and API host.
+- __Always‑visible GPU panel__: Real‑time metrics per GPU (utilization, temperature, memory usage, power) updating every second from `/gpu/metrics`.
+- __Advanced GPU controls__: Optional power limit and persistence mode controls per GPU via `nvidia-smi`.
+- __Multi‑GPU__: Run the same model on multiple GPUs.
+- __Results__: Saves detailed results to JSON and displays summaries in the UI.
+
+## Quick Start (Web App)
+
+1) Ensure Python 3 and Ollama are installed and that Ollama is running locally (or set a remote API host in the UI).
+2) From the project root, run:
+
+```bash
+chmod +x install.sh
+./install.sh
+```
+
+The script will create a virtualenv, install dependencies, start the Flask app in the background, wait for it to come up, and open http://localhost:5000.
+
+To stop the app:
+
+```bash
+if [ -f app.pid ]; then kill $(cat app.pid) && rm -f app.pid; fi
+```
+
+Tail logs:
+
+```bash
+tail -f webapp.log
+```
 
 ## Requirements
 
-- Python 3.6+
+- Python 3.8+
 - Ollama running (locally or remotely)
-- NVIDIA, AMD, or Apple Silicon GPU(s) for GPU benchmarking
+- NVIDIA, AMD, or Apple Silicon GPU(s)
+- For Advanced GPU controls: NVIDIA GPU with `nvidia-smi` available in PATH and sufficient permissions
 
-## Installation
+## Configuration
 
-1. Clone this repository or download the files
-2. Install the required dependencies:
+Models shown and installed by the UI come from `models.json`. You can edit it from the UI or directly in the file.
 
-```bash
-pip install -r requirements.txt
-```
+Benchmark results are stored in `benchmark_results.json` and `results_history/`.
 
-## Usage
+## Usage (Web UI)
 
-Basic usage:
+1) Open the app (http://localhost:5000)
+2) Select one or more models in the left pane
+3) Configure settings in the right pane (Run Settings)
+4) Monitor GPU health and usage in the GPU panel under Run Settings
+5) Click “Run Benchmark”
 
-```bash
-python benchmark.py
-```
+The GPU panel shows per‑GPU: name, temperature, power draw vs limit, utilization, and VRAM usage. The Advanced tab lets you set power limit and persistence mode.
 
-This will run the benchmark with default settings (a selection of popular models, running on all available GPUs).
+Notes:
+- Changing power limits/persistence may require admin privileges. The app surfaces any errors from `nvidia-smi`.
+- GPU polling is 1s; you can continue to use the UI while metrics update.
 
-### Command Line Options
+## CLI Benchmark (optional)
+
+All functionality can be driven from the Web UI, but a CLI is also available:
 
 - `--models`: List of models to benchmark (space-separated)
 - `--models-file`: Path to a JSON file containing models to benchmark
@@ -46,7 +75,7 @@ This will run the benchmark with default settings (a selection of popular models
 - `--output`: Output file path for benchmark results
 - `--api-host`: Ollama API host address
 
-### Examples
+Examples:
 
 Run benchmark on specific models:
 
@@ -124,7 +153,18 @@ The `description` field is optional and for documentation purposes only.
 
 ## Notes
 
-- The benchmark limits token generation to 100 tokens to keep run times reasonable
-- For NVIDIA GPUs, the script uses the `CUDA_VISIBLE_DEVICES` environment variable to select specific GPUs
-- Apple Silicon is treated as a single GPU
-- If no GPUs are detected, the benchmark will run on CPU
+- The benchmark limits token generation to keep run times reasonable.
+- For NVIDIA GPUs, the CLI can use `CUDA_VISIBLE_DEVICES` to select GPUs; the Web UI uses indices.
+- Apple Silicon is treated as a single GPU.
+- If no GPUs are detected, the benchmark will run on CPU.
+
+## Troubleshooting
+
+- If the page doesn’t open automatically, visit http://localhost:5000.
+- Check `webapp.log` for server errors.
+- If GPU metrics show errors, ensure `nvidia-smi` is installed and in PATH (NVIDIA only).
+- For remote Ollama, set the API Host under Run Settings.
+
+## Security
+
+Advanced GPU settings change device power and persistence state via `nvidia-smi`. Use caution, and ensure you have appropriate permissions.

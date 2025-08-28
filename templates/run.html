@@ -5,11 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Run Benchmark</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="{{ url_for('static', filename='styles.css') }}" rel="stylesheet">
   </head>
   <body>
-    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+    <nav class="navbar navbar-expand-lg navbar-dark app-navbar">
       <div class="container-fluid">
-        <a class="navbar-brand" href="/">Ollama GPU Benchmark</a>
+        <a class="navbar-brand" href="/">BIZON GPU Benchmark</a>
         <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
           <span class="navbar-toggler-icon"></span>
         </button>
@@ -54,61 +55,177 @@
         </div>
       </div>
       <form method="post" class="mt-4">
-        {% if models and models|length > 0 %}
-        <div class="mb-3">
-          <label class="form-label">Select Models to Benchmark</label>
-          <div class="row">
-            {% for m in models %}
-            <div class="col-md-6">
-              <div class="form-check">
-                <input class="form-check-input" type="checkbox" name="selected_models" value="{{ m.name }}" id="model_{{ loop.index0 }}" {% if m.name in form_data.selected_models %}checked{% endif %}>
-                <label class="form-check-label" for="model_{{ loop.index0 }}">
-                  <strong>{{ m.name }}</strong> <span class="text-muted">{{ m.description }}</span>
-                </label>
+        <div class="row g-4">
+          <div class="col-lg-7">
+            {% if models and models|length > 0 %}
+            <div class="mb-3">
+              <div class="d-flex flex-wrap gap-2 align-items-center">
+                <label class="form-label me-2 mb-0">Select Models to Benchmark</label>
+                <a href="/models" class="btn btn-sm btn-outline-secondary">Edit list</a>
+                <a href="https://ollama.com/search" target="_blank" class="btn btn-sm btn-outline-primary">Browse models on Ollama</a>
+                <div class="ms-auto d-flex gap-2">
+                  <input id="modelFilter" type="search" class="form-control form-control-sm" placeholder="Filter models…" style="max-width: 220px;">
+                  <button id="selectInstalled" type="button" class="btn btn-sm btn-success">Select installed</button>
+                </div>
+              </div>
+              <div class="row row-cols-1 row-cols-md-2 g-3 mt-2" id="modelsGrid">
+                {% for m in models %}
+                <div class="col model-card" data-name="{{ m.name | lower }}" data-desc="{{ (m.description or '') | lower }}">
+                  <div class="card h-100 shadow-sm">
+                    <div class="card-body d-flex">
+                      <div class="form-check me-2 mt-1">
+                        <input class="form-check-input model-checkbox" type="checkbox" name="selected_models" value="{{ m.name }}" id="model_{{ loop.index0 }}" {% if m.name in form_data.selected_models %}checked{% endif %}>
+                      </div>
+                      <div class="flex-grow-1">
+                        <div class="d-flex align-items-start justify-content-between">
+                          <div>
+                            <div class="fw-semibold">{{ m.name }}</div>
+                            {% if m.description %}
+                            <div class="text-muted small">{{ m.description }}</div>
+                            {% endif %}
+                          </div>
+                          <div class="text-end">
+                            <span class="badge bg-secondary installed-badge" title="Install status" style="white-space:nowrap;">• checking…</span>
+                            <button type="button" class="btn btn-sm btn-outline-success ms-2 install-btn" data-model="{{ m.name }}" title="Install this model">Install</button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                {% endfor %}
               </div>
             </div>
-            {% endfor %}
+            <div class="mb-3">
+              <label for="models" class="form-label">Or enter models (space-separated)</label>
+              <input type="text" class="form-control" id="models" name="models" placeholder="llama3:8b phi3:14b">
+            </div>
+            {% else %}
+            <div class="mb-3">
+              <label for="models" class="form-label">Models (space-separated)</label>
+              <input type="text" class="form-control" id="models" name="models" placeholder="llama3:8b phi3:14b">
+            </div>
+            <div class="mb-3">
+              <a href="/models" class="btn btn-link">Create or edit models.json</a>
+            </div>
+            {% endif %}
           </div>
-          <a href="/models" class="btn btn-link mt-2">Edit models</a>
-        </div>
-        <div class="mb-3">
-          <label for="models" class="form-label">Or enter models (space-separated)</label>
-          <input type="text" class="form-control" id="models" name="models" placeholder="llama3:8b phi3:14b">
-        </div>
-        {% else %}
-        <div class="mb-3">
-          <label for="models" class="form-label">Models (space-separated)</label>
-          <input type="text" class="form-control" id="models" name="models" placeholder="llama3:8b phi3:14b">
-        </div>
-        <div class="mb-3">
-          <a href="/models" class="btn btn-link">Create or edit models.json</a>
-        </div>
-        {% endif %}
-        <div class="mb-3">
-          <label for="prompt" class="form-label">Prompt</label>
-          <input type="text" class="form-control" id="prompt" name="prompt" placeholder="Write an essay about the USA revolution." value="{{ form_data.prompt }}">
-        </div>
-        <div class="mb-3">
-          <label for="gpus" class="form-label">GPUs (indices, space-separated)</label>
-          <input type="text" class="form-control" id="gpus" name="gpus" placeholder="0 1" value="{{ form_data.gpus }}">
-        </div>
-        <div class="mb-3">
-          <label for="runs" class="form-label">Runs per model per GPU</label>
-          <input type="number" class="form-control" id="runs" name="runs" value="{{ form_data.runs }}" min="1">
-        </div>
-        <div class="mb-3">
-          <label for="api_host" class="form-label">Ollama API Host</label>
-          <input type="text" class="form-control" id="api_host" name="api_host" placeholder="http://localhost:11434" value="{{ form_data.api_host }}">
-        </div>
-        <button id="runBtn" type="submit" class="btn btn-success">Run Benchmark</button>
-        <button id="stopBtn" type="button" class="btn btn-danger ms-2" style="display:none;">Stop Benchmark</button>
-        <div id="spinnerBox" class="mt-3" style="display:none;">
-          <div class="spinner-border text-primary" role="status">
-            <span class="visually-hidden">Running...</span>
+          <div class="col-lg-5">
+            <div class="card position-sticky" style="top: 84px;">
+              <div class="card-body">
+                <h5 class="mb-3">Run Settings</h5>
+                <ul class="nav nav-tabs" id="settingsTabs" role="tablist">
+                  <li class="nav-item" role="presentation">
+                    <button class="nav-link active" id="general-tab" data-bs-toggle="tab" data-bs-target="#general" type="button" role="tab">General</button>
+                  </li>
+                  <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="advanced-tab" data-bs-toggle="tab" data-bs-target="#advanced" type="button" role="tab">Advanced</button>
+                  </li>
+                </ul>
+                <div class="tab-content pt-3">
+                  <div class="tab-pane fade show active" id="general" role="tabpanel">
+                    <div class="mb-3">
+                      <label for="prompt" class="form-label">Prompt</label>
+                      <input type="text" class="form-control" id="prompt" name="prompt" placeholder="Write an essay about the USA revolution." value="{{ form_data.prompt }}">
+                    </div>
+                    <div class="mb-3">
+                      <label for="gpus" class="form-label">GPUs (indices, space-separated)</label>
+                      <input type="text" class="form-control" id="gpus" name="gpus" placeholder="0 1" value="{{ form_data.gpus }}">
+                    </div>
+                    <div class="mb-3">
+                      <label for="runs" class="form-label">Runs per model per GPU</label>
+                      <input type="number" class="form-control" id="runs" name="runs" value="{{ form_data.runs }}" min="1">
+                    </div>
+                  </div>
+                  <div class="tab-pane fade" id="advanced" role="tabpanel">
+                    <div class="mb-3">
+                      <label for="api_host" class="form-label">Ollama API Host</label>
+                      <input type="text" class="form-control" id="api_host" name="api_host" placeholder="http://localhost:11434" value="{{ form_data.api_host }}">
+                    </div>
+                  </div>
+                </div>
+                <div class="d-flex align-items-center mt-2">
+                  <button id="runBtn" type="submit" class="btn btn-success">Run Benchmark</button>
+                  <button id="stopBtn" type="button" class="btn btn-danger ms-2" style="display:none;">Stop Benchmark</button>
+                </div>
+                <div id="spinnerBox" class="mt-3" style="display:none;">
+                  <div class="spinner-border text-primary" role="status">
+                    <span class="visually-hidden">Running...</span>
+                  </div>
+                  <span class="ms-2">Benchmark is running...</span>
+                </div>
+                <hr class="my-3">
+                <h5 class="mb-2">GPU</h5>
+                <ul class="nav nav-tabs" id="gpuTabs" role="tablist">
+                  <li class="nav-item" role="presentation">
+                    <button class="nav-link active" id="gpu-monitor-tab" data-bs-toggle="tab" data-bs-target="#gpu-monitor" type="button" role="tab">Monitor</button>
+                  </li>
+                  <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="gpu-advanced-tab" data-bs-toggle="tab" data-bs-target="#gpu-advanced" type="button" role="tab">Advanced</button>
+                  </li>
+                </ul>
+                <div class="tab-content pt-3">
+                  <div class="tab-pane fade show active" id="gpu-monitor" role="tabpanel">
+                    <div id="gpuMetricsBox">
+                      <div id="gpuError" class="alert alert-warning py-2 px-3 d-none"></div>
+                      <div id="gpuList" class="d-flex flex-column gap-3"></div>
+                      <div class="text-muted small mt-2">Updates every second from <code>/gpu/metrics</code>.</div>
+                    </div>
+                  </div>
+                  <div class="tab-pane fade" id="gpu-advanced" role="tabpanel">
+                    <div class="alert alert-danger py-2 px-3 small">
+                      Changing GPU settings may require admin privileges and can impact system stability. Use with caution.
+                    </div>
+                    <div class="row g-2 align-items-end">
+                      <div class="col-12">
+                        <label class="form-label small">GPU Index</label>
+                        <select id="ocGpuIndex" class="form-select form-select-sm"></select>
+                      </div>
+                      <div class="col-6">
+                        <label class="form-label small">Power limit (W)</label>
+                        <input id="ocPowerLimit" type="number" class="form-control form-control-sm" placeholder="e.g. 300">
+                      </div>
+                      <div class="col-6">
+                        <label class="form-label small">Persistence mode</label>
+                        <select id="ocPersistence" class="form-select form-select-sm">
+                          <option value="">No change</option>
+                          <option value="1">Enable</option>
+                          <option value="0">Disable</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div class="mt-2 d-flex gap-2">
+                      <button id="ocApplyBtn" type="button" class="btn btn-sm btn-primary">Apply</button>
+                      <button id="ocResetBtn" type="button" class="btn btn-sm btn-outline-secondary">Reset Power Limit</button>
+                    </div>
+                    <div id="ocStatus" class="small text-muted mt-2"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          
           </div>
-          <span class="ms-2">Benchmark is running...</span>
         </div>
       </form>
+      
+      <!-- Pull Progress Modal -->
+      <div class="modal fade" id="pullModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title">Installing Model</h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+              <div class="small text-muted mb-2" id="pullModelName"></div>
+              <pre id="pullLog" class="bg-light p-3 rounded" style="height: 260px; overflow:auto; white-space:pre-wrap;"></pre>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script>
@@ -121,6 +238,25 @@
       const progressBar = document.getElementById('progressBar');
       const logViewer = document.getElementById('logViewer');
       const clearLogsBtn = document.getElementById('clearLogsBtn');
+      // Model grid helpers
+      const modelsGrid = document.getElementById('modelsGrid');
+      const modelFilter = document.getElementById('modelFilter');
+      const selectInstalledBtn = document.getElementById('selectInstalled');
+      const pullModal = new bootstrap.Modal(document.getElementById('pullModal'));
+      const pullLog = document.getElementById('pullLog');
+      const pullModelName = document.getElementById('pullModelName');
+      let pullTimer = null;
+      // GPU monitor elements
+      const gpuList = document.getElementById('gpuList');
+      const gpuError = document.getElementById('gpuError');
+      let gpuTimer = null;
+      // OC controls
+      const ocGpuIndex = document.getElementById('ocGpuIndex');
+      const ocPowerLimit = document.getElementById('ocPowerLimit');
+      const ocPersistence = document.getElementById('ocPersistence');
+      const ocApplyBtn = document.getElementById('ocApplyBtn');
+      const ocResetBtn = document.getElementById('ocResetBtn');
+      const ocStatus = document.getElementById('ocStatus');
       
       // State variables
       let running = false;
@@ -157,6 +293,254 @@
           running = true;
           startLogPolling();
         }, 1000);
+      });
+
+      // Fetch installed models from Ollama and mark UI
+      async function markInstalledModels(){
+        try{
+          const r = await fetch('/ollama/installed_models');
+          const j = await r.json();
+          const installed = new Set(j.models || []);
+          // normalize helper that matches by prefix before ':' as ollama tags may include digests
+          function isInstalled(name){
+            if (installed.has(name)) return true;
+            // try plain family match
+            const n = name.toLowerCase();
+            for (const im of installed){
+              if (im.toLowerCase() === n) return true;
+              // if either side includes a ':' tag, compare left side and full
+              const a = im.split(':')[0].toLowerCase();
+              const b = n.split(':')[0];
+              if (a === b) return true;
+            }
+          }
+
+          // Update badges and optionally checkbox state
+          modelsGrid?.querySelectorAll('.model-card').forEach(card => {
+            const cb = card.querySelector('.model-checkbox');
+            const badge = card.querySelector('.installed-badge');
+            const installBtn = card.querySelector('.install-btn');
+            if (isInstalled(cb.value)){
+              badge.className = 'badge bg-success installed-badge';
+              badge.textContent = '✓ installed';
+              badge.title = 'Model is installed locally';
+              if (installBtn){ installBtn.disabled = true; installBtn.style.visibility = 'hidden'; }
+            } else {
+              badge.className = 'badge bg-light text-muted installed-badge';
+              badge.textContent = 'not installed';
+              badge.title = 'Model not installed';
+              if (installBtn){ installBtn.disabled = false; installBtn.style.visibility = 'visible'; }
+            }
+          });
+        } catch(e){
+          // If request fails, set badges to unknown
+          modelsGrid?.querySelectorAll('.installed-badge').forEach(b => { b.className='badge bg-secondary installed-badge'; b.textContent='unknown'; });
+        }
+      }
+
+      // ---------------- GPU Monitor ----------------
+      async function fetchGpuMetrics(){
+        try{
+          const r = await fetch('/gpu/metrics', {cache:'no-store'});
+          const j = await r.json();
+          renderGpus(j);
+        }catch(err){
+          showGpuError('Failed to read GPU metrics');
+        }
+      }
+
+      function startGpuPolling(){
+        if (gpuTimer) return;
+        fetchGpuMetrics();
+        gpuTimer = setInterval(fetchGpuMetrics, 1000);
+      }
+
+      function stopGpuPolling(){
+        if (gpuTimer){ clearInterval(gpuTimer); gpuTimer = null; }
+      }
+
+      function showGpuError(msg){
+        if (!gpuError) return;
+        gpuError.textContent = msg;
+        gpuError.classList.remove('d-none');
+      }
+
+      function hideGpuError(){
+        if (!gpuError) return;
+        gpuError.classList.add('d-none');
+      }
+
+      function renderGpus(data){
+        if (!gpuList) return;
+        const gpus = (data && data.gpus) || [];
+        if (data && data.error){
+          showGpuError(data.error);
+        } else {
+          hideGpuError();
+        }
+        gpuList.innerHTML = '';
+        if (!gpus.length){
+          const empty = document.createElement('div');
+          empty.className = 'text-muted small';
+          empty.textContent = 'No NVIDIA GPU detected or nvidia-smi unavailable.';
+          gpuList.appendChild(empty);
+          return;
+        }
+        for (const g of gpus){
+          const memPct = g.memory_total_mib ? Math.min(100, Math.round((g.memory_used_mib / g.memory_total_mib) * 100)) : 0;
+          const util = g.utilization_percent != null ? Math.round(g.utilization_percent) : 0;
+          const temp = g.temperature_c != null ? Math.round(g.temperature_c) : 0;
+          const power = g.power_draw_w != null ? Math.round(g.power_draw_w) : null;
+          const powerLimit = g.power_limit_w != null ? Math.round(g.power_limit_w) : null;
+          const wrap = document.createElement('div');
+          wrap.className = 'border rounded p-2';
+          wrap.innerHTML = `
+            <div class="d-flex justify-content-between align-items-center">
+              <div class="fw-semibold">GPU ${g.index}: ${g.name}</div>
+              <div class="text-muted small">Temp ${temp}°C${power!=null?` · Power ${power}${powerLimit?`/${powerLimit}`:''} W`:''}</div>
+            </div>
+            <div class="mt-2">
+              <div class="small">Utilization ${util}%</div>
+              <div class="progress" style="height:8px;">
+                <div class="progress-bar bg-success" role="progressbar" style="width:${util}%" aria-valuenow="${util}" aria-valuemin="0" aria-valuemax="100"></div>
+              </div>
+            </div>
+            <div class="mt-2">
+              <div class="small">Memory ${Math.round(g.memory_used_mib/1024*10)/10} / ${Math.round(g.memory_total_mib/1024*10)/10} GiB (${memPct}%)</div>
+              <div class="progress" style="height:8px;">
+                <div class="progress-bar bg-info" role="progressbar" style="width:${memPct}%" aria-valuenow="${memPct}" aria-valuemin="0" aria-valuemax="100"></div>
+              </div>
+            </div>
+          `;
+          gpuList.appendChild(wrap);
+        }
+        // Ensure OC GPU index options are in sync
+        syncOcGpuOptions(gpus);
+      }
+
+      // Start/stop GPU polling when the GPU tab is shown/hidden
+      // Populate Advanced tab GPU selector
+      async function loadGpuList(){
+        try{
+          const r = await fetch('/gpu/list', {cache:'no-store'});
+          const j = await r.json();
+          syncOcGpuOptions(j.gpus || []);
+        }catch(e){ /* ignore */ }
+      }
+
+      function syncOcGpuOptions(gpus){
+        if (!ocGpuIndex) return;
+        const cur = new Set();
+        gpus.forEach(g => cur.add(String(g.index)));
+        // Rebuild only if changed
+        const existing = Array.from(ocGpuIndex.options).map(o=>o.value);
+        if (existing.length !== cur.size || existing.some(v=>!cur.has(v))){
+          ocGpuIndex.innerHTML = '';
+          gpus.forEach(g=>{
+            const opt = document.createElement('option');
+            opt.value = String(g.index);
+            opt.textContent = `GPU ${g.index}: ${g.name}`;
+            ocGpuIndex.appendChild(opt);
+          });
+        }
+      }
+
+      function setOcStatus(msg, ok=true){
+        if (!ocStatus) return;
+        ocStatus.textContent = msg || '';
+        ocStatus.className = `small mt-2 ${ok? 'text-success':'text-danger'}`;
+      }
+
+      ocApplyBtn?.addEventListener('click', async ()=>{
+        try{
+          setOcStatus('Applying...', true);
+          const body = { index: ocGpuIndex?.value };
+          if (ocPowerLimit?.value) body.power_limit_w = Number(ocPowerLimit.value);
+          const p = ocPersistence?.value;
+          if (p === '0' || p === '1') body.persistence = p;
+          const r = await fetch('/gpu/settings_apply', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+          const j = await r.json();
+          if (j.ok){
+            setOcStatus('Settings applied successfully.', true);
+            loadGpuList();
+          } else {
+            setOcStatus(j.detail || j.error || 'Failed to apply settings.', false);
+          }
+        }catch(e){ setOcStatus('Error applying settings.', false); }
+      });
+
+      ocResetBtn?.addEventListener('click', async ()=>{
+        try{
+          setOcStatus('Resetting power limit...', true);
+          const r = await fetch('/gpu/settings_reset', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({index: ocGpuIndex?.value})});
+          const j = await r.json();
+          if (j.ok){
+            setOcStatus(`Power limit reset to ${j.power_limit_w} W.`, true);
+            loadGpuList();
+          } else {
+            setOcStatus(j.error || 'Failed to reset power limit.', false);
+          }
+        }catch(e){ setOcStatus('Error resetting power limit.', false); }
+      });
+
+
+      // Filter models as user types
+      modelFilter?.addEventListener('input', ()=>{
+        const q = (modelFilter.value || '').toLowerCase();
+        modelsGrid?.querySelectorAll('.model-card').forEach(card =>{
+          const name = card.getAttribute('data-name') || '';
+          const desc = card.getAttribute('data-desc') || '';
+          const show = !q || name.includes(q) || desc.includes(q);
+          card.style.display = show ? '' : 'none';
+        });
+      });
+
+      // Select all installed models convenience button
+      selectInstalledBtn?.addEventListener('click', ()=>{
+        modelsGrid?.querySelectorAll('.model-card').forEach(card =>{
+          const badge = card.querySelector('.installed-badge');
+          const cb = card.querySelector('.model-checkbox');
+          if (badge && badge.textContent.includes('installed')){
+            cb.checked = true;
+          }
+        });
+      });
+
+      // Run once on load
+      document.addEventListener('DOMContentLoaded', markInstalledModels);
+      document.addEventListener('DOMContentLoaded', startGpuPolling);
+      document.addEventListener('DOMContentLoaded', loadGpuList);
+
+      // Attach install button handlers
+      document.addEventListener('click', async (e)=>{
+        const btn = e.target.closest('.install-btn');
+        if(!btn) return;
+        const model = btn.getAttribute('data-model');
+        pullModelName.textContent = `ollama pull ${model}`;
+        pullLog.textContent = '';
+        pullModal.show();
+        // disable the button and set pulling state on the card
+        const card = btn.closest('.model-card');
+        const badge = card?.querySelector('.installed-badge');
+        btn.disabled = true;
+        if (badge){ badge.className='badge bg-warning text-dark installed-badge'; badge.textContent='pulling…'; }
+        await fetch('/ollama/pull', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({model})});
+        pullTimer && clearInterval(pullTimer);
+        pullTimer = setInterval(async ()=>{
+          const r = await fetch('/ollama/pull_progress');
+          const j = await r.json();
+          pullLog.textContent = (j.lines||[]).join('\n');
+          pullLog.scrollTop = pullLog.scrollHeight;
+          if (j.done){
+            clearInterval(pullTimer);
+            // refresh badges and auto-check if installed
+            await markInstalledModels();
+            const card2 = document.querySelector(`.install-btn[data-model="${CSS.escape(model)}"]`)?.closest('.model-card');
+            const cb2 = card2?.querySelector('.model-checkbox');
+            const badge2 = card2?.querySelector('.installed-badge');
+            if (badge2 && badge2.textContent.includes('installed') && cb2){ cb2.checked = true; }
+          }
+        }, 1200);
       });
       
       // Stop button click handler
@@ -282,6 +666,7 @@
       function stopBenchmark(message) {
         running = false;
         if (logPollingInterval) clearInterval(logPollingInterval);
+        if (gpuTimer) { clearInterval(gpuTimer); gpuTimer = null; }
         
         spinnerBox.style.display = 'none';
         stopBtn.style.display = 'none';

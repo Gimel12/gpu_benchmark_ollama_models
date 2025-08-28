@@ -47,6 +47,18 @@
     {
       "name": "qwen3:32b",
       "description": "Qwen 3 32B model"
+    },
+    {
+      "name": "gpt-oss:latest",
+      "description": "Open AI open model"
+    },
+    {
+      "name": "gpt-oss:20b",
+      "description": ""
+    },
+    {
+      "name": "gpt-oss:120b",
+      "description": ""
     }
   ]
 }

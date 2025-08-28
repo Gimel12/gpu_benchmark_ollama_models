@@ -75,6 +75,22 @@
               <span class="badge bg-secondary" id="badgeAPI">API: checking…</span>
             </div>
             <div class="small text-muted mb-2">We will install Ollama if needed using: curl -fsSL https://ollama.com/install.sh | sh</div>
+            <div id="sudoAlert" class="alert alert-warning d-none" role="alert">
+              <div class="fw-semibold mb-1">Installer needs your sudo password.</div>
+              <div class="mb-2">Enter your system password and click <span class="fw-semibold">Run with sudo</span> to continue the installation.</div>
+              <div class="row g-2 align-items-center mb-2">
+                <div class="col-sm-6">
+                  <input id="sudoPassword" type="password" class="form-control" placeholder="Enter sudo password">
+                </div>
+                <div class="col-auto">
+                  <button id="sudoRunBtn" class="btn btn-danger btn-sm" type="button">Run with sudo</button>
+                </div>
+              </div>
+              <div class="d-flex gap-2">
+                <button id="retryInstallBtn" class="btn btn-warning btn-sm" type="button">Retry Install</button>
+                <button id="retryStartBtn" class="btn btn-outline-warning btn-sm" type="button">Retry Start API</button>
+              </div>
+            </div>
             <pre id="setupLog" class="bg-light p-3 rounded" style="height: 240px; overflow:auto; white-space:pre-wrap;"></pre>
           </div>
           <div class="modal-footer">
@@ -92,35 +108,93 @@
       const badgeInstalled = document.getElementById('badgeInstalled');
       const badgeAPI = document.getElementById('badgeAPI');
       const continueBtn = document.getElementById('continueBtn');
+      const sudoAlert = document.getElementById('sudoAlert');
+      const retryInstallBtn = document.getElementById('retryInstallBtn');
+      const retryStartBtn = document.getElementById('retryStartBtn');
+      const sudoRunBtn = document.getElementById('sudoRunBtn');
+      const sudoPassword = document.getElementById('sudoPassword');
 
-      function setBadge(el, okText, ok){
-        el.className = 'badge ' + (ok ? 'bg-success' : 'bg-danger');
-        el.textContent = okText + (ok ? ' ✓' : ' ✗');
+      function setBadge(el, text, cls){
+        el.className = 'badge ' + cls;
+        el.textContent = text;
+      }
+
+      function updateContinue(installed, api){
+        // Allow continue if API running
+        continueBtn.disabled = !api;
       }
 
       async function checkStatus(){
         const r = await fetch('/ollama/status');
         const j = await r.json();
-        setBadge(badgeInstalled, 'Ollama ' + (j.version || ''), j.installed);
-        setBadge(badgeAPI, 'API', j.api);
+        if (j.installed){
+          setBadge(badgeInstalled, `Ollama: Installed ${j.version || ''}`.trim(), 'bg-success');
+        } else {
+          setBadge(badgeInstalled, 'Ollama: Not found', 'bg-danger');
+        }
+        if (j.api){
+          setBadge(badgeAPI, 'API: Running', 'bg-success');
+        } else {
+          setBadge(badgeAPI, 'API: Not responding', 'bg-danger');
+        }
+        updateContinue(j.installed, j.api);
         return j;
       }
 
       let progressTimer = null;
       async function startInstall(){
-        logEl.textContent += 'Starting install...\n';
+        logEl.textContent += 'Starting Ollama install...\n';
         await fetch('/ollama/install', {method:'POST'});
         progressTimer = setInterval(async ()=>{
           const r = await fetch('/ollama/install_progress');
           const j = await r.json();
           logEl.textContent = j.lines.join('\n');
           logEl.scrollTop = logEl.scrollHeight;
-          setBadge(badgeInstalled, 'Ollama', j.installed);
-          setBadge(badgeAPI, 'API', j.api);
-          if (j.installed && j.api){
-            clearInterval(progressTimer);
-            continueBtn.disabled = false;
+          if (j.installed){
+            setBadge(badgeInstalled, 'Ollama: Installed', 'bg-success');
+          } else {
+            setBadge(badgeInstalled, 'Ollama: Not found', 'bg-danger');
           }
+          if (j.api){
+            setBadge(badgeAPI, 'API: Running', 'bg-success');
+          } else {
+            setBadge(badgeAPI, 'API: Not responding', 'bg-danger');
+          }
+          // show sudo guidance if needed
+          if (j.need_sudo){
+            sudoAlert.classList.remove('d-none');
+          }
+          updateContinue(j.installed, j.api);
+          if (j.api){
+            clearInterval(progressTimer);
+          }
+        }, 1500);
+      }
+
+      async function startInstallWithSudo(){
+        // start sudo-based install and then poll progress
+        const pwd = sudoPassword?.value || '';
+        await fetch('/ollama/install_sudo', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({password: pwd})
+        });
+        // clear password from field for safety
+        if (sudoPassword) sudoPassword.value = '';
+        progressTimer && clearInterval(progressTimer);
+        progressTimer = setInterval(async ()=>{
+          const r = await fetch('/ollama/install_progress');
+          const j = await r.json();
+          logEl.textContent = j.lines.join('\n');
+          logEl.scrollTop = logEl.scrollHeight;
+          if (j.installed){
+            setBadge(badgeInstalled, 'Ollama: Installed', 'bg-success');
+          }
+          if (j.api){
+            setBadge(badgeAPI, 'API: Running', 'bg-success');
+            clearInterval(progressTimer);
+          }
+          updateContinue(j.installed, j.api);
         }, 1500);
       }
 
@@ -130,7 +204,7 @@
         setupModal.show();
         const s = await checkStatus();
         if (s.installed && s.api){
-          continueBtn.disabled = false;
+          updateContinue(s.installed, s.api);
           return;
         }
         if (s.installed && !s.api){
@@ -138,7 +212,7 @@
           await fetch('/ollama/start', {method:'POST'});
           const again = await checkStatus();
           if (again.api){
-            continueBtn.disabled = false;
+            updateContinue(again.installed, again.api);
             return;
           }
         }
@@ -151,6 +225,21 @@
 
       continueBtn.addEventListener('click', ()=>{
         window.location.href = '/run';
+      });
+
+      retryInstallBtn?.addEventListener('click', async ()=>{
+        sudoAlert.classList.add('d-none');
+        await startInstall();
+      });
+
+      retryStartBtn?.addEventListener('click', async ()=>{
+        await fetch('/ollama/start', {method:'POST'});
+        await checkStatus();
+      });
+
+      sudoRunBtn?.addEventListener('click', async ()=>{
+        sudoAlert.classList.remove('d-none');
+        await startInstallWithSudo();
       });
     </script>
   </body>

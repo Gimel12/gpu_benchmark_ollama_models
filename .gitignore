@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual env
+.venv/
+venv/
+ENV/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# App runtime artifacts
+app.pid
+webapp.log
+benchmark.log
+benchmark_results.json
+results_history/
+ollama_install.log
+
+# IDE
+.vscode/
+.idea/
