@@ -4,11 +4,13 @@ import os
 import json
 import csv
 import io
-import shutil
+import time
 import uuid
+import math
+import statistics
+from datetime import datetime
 from threading import Thread, Lock
 from werkzeug.utils import secure_filename
-from datetime import datetime
 import requests
 import signal
 
@@ -26,6 +28,11 @@ app = Flask(__name__)
 RESULTS_FILE = "benchmark_results.json"
 RESULTS_HISTORY_DIR = "results_history"
 PRESETS_FILE = "benchmark_presets.json"
+DEFAULT_QA_MODEL = "gpt-oss:latest"
+
+# In-memory QA sessions: { session_id: { 'source': str, 'filename': str|None, 'results': list,
+#                                        'facts_text': str, 'history': [ {'role','content'} ] } }
+QA_SESSIONS = {}
 
 # Create necessary directories
 os.makedirs(RESULTS_HISTORY_DIR, exist_ok=True)
@@ -919,6 +926,406 @@ def check_ollama():
     """Check Ollama status"""
     result = check_ollama_status()
     return jsonify(result)
+
+# -------------------- Simple helper: list history files (JSON) --------------------
+@app.route('/history_list')
+def history_list():
+    items = []
+    if os.path.exists(RESULTS_HISTORY_DIR):
+        for filename in os.listdir(RESULTS_HISTORY_DIR):
+            if filename.endswith('.json'):
+                items.append(filename)
+    items.sort(reverse=True)
+    return jsonify({'files': items})
+
+# -------------------- Chat page --------------------
+@app.route('/chat')
+def chat_page():
+    return render_template('chat.html')
+
+# -------------------- QA over results helpers and endpoints --------------------
+def _safe_num(v):
+    try:
+        if v is None:
+            return None
+        return float(v)
+    except Exception:
+        return None
+
+def build_facts_from_results(results, max_chars: int = 12000) -> str:
+    """Create a compact textual summary of benchmark results for LLM context."""
+    lines = []
+    lines.append("You are an assistant answering questions about GPU benchmark results.")
+    lines.append("Data format: per-run records with fields like model, gpu_idx, tokens_per_second, total_duration_seconds, and gpu_avg_metrics (avg_temperature_c, avg_utilization_percent, avg_memory_used_mib, avg_power_draw_w, power_limit_w, gpu_name). Memory is in MiB.")
+    # Group by model + gpu label
+    groups = {}
+    for r in results or []:
+        model = r.get('model')
+        gpu_idx = r.get('gpu_idx', None)
+        multi_gpu = r.get('multi_gpu', False)
+        gpu_label = f"Multi: {r.get('gpu_idx')}" if multi_gpu else ("CPU" if gpu_idx is None else str(gpu_idx))
+        key = f"{model}__{gpu_label}"
+        g = groups.setdefault(key, {
+            'model': model,
+            'gpu': gpu_label,
+            'gpu_name': '',
+            'tps': [], 'dur': [], 'temp': [], 'util': [], 'mem_mib': [], 'power': [], 'runs': 0
+        })
+        g['runs'] += 1
+        tps = _safe_num(r.get('tokens_per_second'))
+        if tps is not None: g['tps'].append(tps)
+        dur = _safe_num(r.get('total_duration_seconds'))
+        if dur is not None: g['dur'].append(dur)
+        gm = r.get('gpu_avg_metrics') or {}
+        if gm:
+            if not g['gpu_name']:
+                g['gpu_name'] = gm.get('gpu_name') or ''
+            v = _safe_num(gm.get('avg_temperature_c'))
+            if v is not None: g['temp'].append(v)
+            v = _safe_num(gm.get('avg_utilization_percent'))
+            if v is not None: g['util'].append(v)
+            v = _safe_num(gm.get('avg_memory_used_mib'))
+            if v is not None: g['mem_mib'].append(v)
+            v = _safe_num(gm.get('avg_power_draw_w'))
+            if v is not None: g['power'].append(v)
+
+    def _avg(arr):
+        return sum(arr)/len(arr) if arr else None
+
+    lines.append("\nAggregates by (model, GPU):")
+    for g in groups.values():
+        def fmt(x, d=2):
+            return ("" if x is None else (f"{x:.{d}f}"))
+        mem_gib = (_avg(g['mem_mib'])/1024.0) if g['mem_mib'] else None
+        lines.append(
+            f"- model={g['model']} gpu={g['gpu']} gpu_name={g['gpu_name']} runs={g['runs']} "
+            f"avg_tps={fmt(_avg(g['tps']))} min_tps={fmt(min(g['tps']) if g['tps'] else None)} max_tps={fmt(max(g['tps']) if g['tps'] else None)} "
+            f"avg_dur_s={fmt(_avg(g['dur']))} avg_temp_c={fmt(_avg(g['temp']),1)} avg_util_pct={fmt(_avg(g['util']),1)} "
+            f"avg_mem_gib={fmt(mem_gib,2)} avg_power_w={fmt(_avg(g['power']),1)}"
+        )
+
+    text = "\n".join(lines)
+    if len(text) > max_chars:
+        text = text[:max_chars] + "\n...[truncated]"
+    return text
+
+def build_facts_from_generic_rows(rows: list[dict], max_chars: int = 12000) -> str:
+    """Create a compact textual summary for arbitrary tabular data (CSV/JSON).
+    - Infers columns, basic types, counts
+    - Computes simple stats for numeric columns
+    - Shows a few sample rows
+    """
+    lines = []
+    lines.append("You are an assistant answering questions about an arbitrary dataset uploaded by the user.")
+    lines.append("If you don't have a value, say so. When helpful, present results as concise bullet points or a small Markdown table.")
+
+    # Normalize rows
+    if not isinstance(rows, list):
+        rows = []
+    rows = [r for r in rows if isinstance(r, dict)]
+    n_rows = len(rows)
+
+    # Collect columns
+    cols = set()
+    for r in rows[:500]:
+        cols.update(r.keys())
+    cols = list(cols)
+    lines.append(f"Rows: {n_rows}")
+    lines.append(f"Columns ({len(cols)}): {', '.join(cols) if cols else '(none)'}")
+
+    # Stats for numeric columns
+    def to_float(x):
+        try:
+            if x is None or x == '':
+                return None
+            return float(str(x).replace(',', ''))
+        except Exception:
+            return None
+
+    lines.append("\nNumeric column statistics (approx):")
+    for c in cols:
+        vals = [to_float(r.get(c)) for r in rows[:500]]
+        nums = [v for v in vals if v is not None]
+        if not nums:
+            continue
+        try:
+            avg = sum(nums) / len(nums)
+            mn = min(nums)
+            mx = max(nums)
+            lines.append(f"- {c}: count={len(nums)} min={mn:.4g} max={mx:.4g} mean={avg:.4g}")
+        except Exception:
+            pass
+
+    # Sample rows
+    lines.append("\nSample rows (first up to 5):")
+    sample = rows[:5]
+    if sample and cols:
+        # Build a small Markdown table
+        header = '| ' + ' | '.join(cols[:8]) + ' |'
+        sep = '| ' + ' | '.join(['---'] * min(len(cols), 8)) + ' |'
+        lines.append(header)
+        lines.append(sep)
+        for r in sample:
+            row_vals = [str(r.get(c, ''))[:80] for c in cols[:8]]
+            lines.append('| ' + ' | '.join(row_vals) + ' |')
+    else:
+        lines.append('(no rows)')
+
+    text = "\n".join(lines)
+    if len(text) > max_chars:
+        text = text[:max_chars] + "\n...[truncated]"
+    return text
+
+def _load_results_source(source: str, filename: str | None):
+    if source == 'current':
+        if not os.path.exists(RESULTS_FILE):
+            return None, 'no_current_results'
+        with open(RESULTS_FILE) as f:
+            return json.load(f), None
+    elif source == 'history':
+        if not filename:
+            return None, 'missing_history_filename'
+        path = os.path.join(RESULTS_HISTORY_DIR, secure_filename(filename))
+        if not os.path.exists(path):
+            return None, 'history_file_not_found'
+        with open(path) as f:
+            return json.load(f), None
+    else:
+        return None, 'unsupported_source'
+
+@app.route('/qa/load_results', methods=['POST'])
+def qa_load_results():
+    # Handle multipart (upload) or JSON/form for current/history
+    if request.files:
+        # Upload path: accept .json or .csv and convert to internal schema
+        file = request.files.get('file')
+        if not file or not file.filename:
+            return jsonify({'ok': False, 'error': 'missing_file'}), 400
+        fname = secure_filename(file.filename)
+        try:
+            if fname.lower().endswith('.json'):
+                content = file.read()
+                payload = json.loads(content.decode('utf-8'))
+                # If it's a list of dicts that looks like benchmark results, use specialized builder
+                if isinstance(payload, list) and payload and isinstance(payload[0], dict) and (
+                    'tokens_per_second' in payload[0] or 'gpu_avg_metrics' in payload[0] or 'model' in payload[0]
+                ):
+                    results = payload
+                    facts = build_facts_from_results(results)
+                elif isinstance(payload, list) and all(isinstance(x, dict) for x in payload):
+                    results = payload
+                    facts = build_facts_from_generic_rows(results)
+                else:
+                    return jsonify({'ok': False, 'error': 'invalid_json_results'}), 400
+            elif fname.lower().endswith('.csv'):
+                stream = io.StringIO(file.read().decode('utf-8'))
+                reader = csv.DictReader(stream)
+                rows = list(reader)
+                headers = [h.strip() for h in (reader.fieldnames or [])]
+                # Detect benchmark export schema
+                required = {'Model','GPU','Tokens/sec','Duration (s)','Prompt'}
+                if required.issubset(set(headers)):
+                    converted = []
+                    for row in rows:
+                        try:
+                            model = row.get('Model')
+                            gpu_col = row.get('GPU')
+                            try:
+                                gpu_idx = int(gpu_col) if gpu_col not in (None, '', 'CPU') else None
+                            except Exception:
+                                gpu_idx = None
+                            tps = float(row.get('Tokens/sec') or 0) if row.get('Tokens/sec') not in (None, '') else None
+                            dur = float(row.get('Duration (s)') or 0) if row.get('Duration (s)') not in (None, '') else None
+                            prompt = row.get('Prompt')
+                            avg_temp = float(row.get('Avg Temp (°C)')) if row.get('Avg Temp (°C)') not in (None, '') else None
+                            avg_util = float(row.get('Avg Util (%)')) if row.get('Avg Util (%)') not in (None, '') else None
+                            avg_mem_gib = float(row.get('Avg Mem (GiB)')) if row.get('Avg Mem (GiB)') not in (None, '') else None
+                            avg_mem_mib = avg_mem_gib * 1024.0 if avg_mem_gib is not None else None
+                            avg_power = float(row.get('Avg Power (W)')) if row.get('Avg Power (W)') not in (None, '') else None
+                            ts = row.get('Timestamp')
+                        except Exception:
+                            continue
+                        converted.append({
+                            'model': model,
+                            'gpu_idx': gpu_idx,
+                            'tokens_per_second': tps,
+                            'total_duration_seconds': dur,
+                            'prompt': prompt,
+                            'timestamp': ts,
+                            'gpu_avg_metrics': {
+                                'avg_temperature_c': avg_temp,
+                                'avg_utilization_percent': avg_util,
+                                'avg_memory_used_mib': avg_mem_mib,
+                                'avg_power_draw_w': avg_power,
+                            }
+                        })
+                    results = converted
+                    facts = build_facts_from_results(results)
+                else:
+                    # Generic CSV: summarize as arbitrary table
+                    results = rows
+                    facts = build_facts_from_generic_rows(results)
+            else:
+                return jsonify({'ok': False, 'error': 'unsupported_file_type'}), 400
+        except Exception as e:
+            return jsonify({'ok': False, 'error': f'parse_error: {e}'}), 400
+        sid = str(uuid.uuid4())
+        QA_SESSIONS[sid] = {
+            'source': 'upload',
+            'filename': fname,
+            'results': results,
+            'facts_text': facts,
+            'history': []
+        }
+        return jsonify({'ok': True, 'session_id': sid, 'suggested_model': DEFAULT_QA_MODEL})
+    else:
+        data = request.get_json(silent=True) or request.form or {}
+        source = (data.get('source') or 'current').strip()
+        filename = (data.get('filename') or '').strip() or None
+        if source not in ('current','history'):
+            return jsonify({'ok': False, 'error': 'unsupported_source'}), 400
+        results, err = _load_results_source(source, filename)
+        if err:
+            return jsonify({'ok': False, 'error': err}), 400
+        if not isinstance(results, list):
+            return jsonify({'ok': False, 'error': 'invalid_results_format'}), 400
+        facts = build_facts_from_results(results)
+        sid = str(uuid.uuid4())
+        QA_SESSIONS[sid] = {
+            'source': source,
+            'filename': filename,
+            'results': results,
+            'facts_text': facts,
+            'history': []
+        }
+        return jsonify({'ok': True, 'session_id': sid, 'suggested_model': DEFAULT_QA_MODEL})
+
+@app.route('/qa/ask', methods=['POST'])
+def qa_ask():
+    data = request.get_json(silent=True) or {}
+    sid = (data.get('session_id') or '').strip()
+    question = (data.get('question') or '').strip()
+    model = (data.get('model') or DEFAULT_QA_MODEL).strip()
+    if not sid or sid not in QA_SESSIONS:
+        return jsonify({'ok': False, 'error': 'invalid_session'}), 400
+    if not question:
+        return jsonify({'ok': False, 'error': 'empty_question'}), 400
+    if not ollama_api_ok():
+        return jsonify({'ok': False, 'error': 'ollama_unavailable'}), 503
+
+    sess = QA_SESSIONS[sid]
+    # Compose messages: system with facts, prior history, user question
+    messages = []
+    sys_prompt = (
+        "You are a technical analyst for benchmark results. Use only the provided facts."
+        " If comparing GPUs/models, cite specific aggregates. If data is missing, say so."
+        " Formatting requirements: respond in clean, concise GitHub-Flavored Markdown."
+        " - Use headings (##) for sections when helpful."
+        " - Prefer bullet lists for highlights."
+        " - For tabular data, produce valid Markdown tables with a header row and a separator row (---)."
+        " - Do NOT output ASCII-art tables or raw pipe-delimited text."
+        " - Bold metric labels (e.g., **Tokens/sec**)."
+        " Units: TPS=tokens/sec, durations in seconds, temperatures in °C, memory in GiB (facts provided in MiB)."
+        "\n\nFACTS:\n" + (sess.get('facts_text') or '')
+    )
+    messages.append({'role': 'system', 'content': sys_prompt})
+    for m in sess['history']:
+        messages.append(m)
+    messages.append({'role': 'user', 'content': question})
+
+    try:
+        resp = requests.post(
+            "http://localhost:11434/api/chat",
+            json={
+                'model': model,
+                'messages': messages,
+                'stream': False
+            },
+            timeout=120
+        )
+        if not resp.ok:
+            return jsonify({'ok': False, 'error': f'ollama_error_{resp.status_code}'}), 502
+        jr = resp.json() or {}
+        answer = (jr.get('message') or {}).get('content') or jr.get('response') or ''
+        if not answer:
+            answer = ''
+        # Update history
+        sess['history'].append({'role': 'user', 'content': question})
+        sess['history'].append({'role': 'assistant', 'content': answer})
+        return jsonify({'ok': True, 'answer': answer})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+@app.route('/qa/ask_stream', methods=['POST'])
+def qa_ask_stream():
+    data = request.get_json(silent=True) or {}
+    sid = (data.get('session_id') or '').strip()
+    question = (data.get('question') or '').strip()
+    model = (data.get('model') or DEFAULT_QA_MODEL).strip()
+    if not sid or sid not in QA_SESSIONS:
+        return jsonify({'ok': False, 'error': 'invalid_session'}), 400
+    if not question:
+        return jsonify({'ok': False, 'error': 'empty_question'}), 400
+    if not ollama_api_ok():
+        return jsonify({'ok': False, 'error': 'ollama_unavailable'}), 503
+
+    sess = QA_SESSIONS[sid]
+    messages = []
+    sys_prompt = (
+        "You are a technical analyst for benchmark results. Use only the provided facts."
+        " If comparing GPUs/models, cite specific aggregates. If data is missing, say so."
+        " Formatting requirements: respond in clean, concise GitHub-Flavored Markdown."
+        " - Use headings (##) for sections when helpful."
+        " - Prefer bullet lists for highlights."
+        " - For tabular data, produce valid Markdown tables with a header row and a separator row (---)."
+        " - Do NOT output ASCII-art tables or raw pipe-delimited text."
+        " - Bold metric labels (e.g., **Tokens/sec**)."
+        " Units: TPS=tokens/sec, durations in seconds, temperatures in °C, memory in GiB (facts provided in MiB)."
+        "\n\nFACTS:\n" + (sess.get('facts_text') or '')
+    )
+    messages.append({'role': 'system', 'content': sys_prompt})
+    for m in sess['history']:
+        messages.append(m)
+    messages.append({'role': 'user', 'content': question})
+
+    def generate():
+        accumulated = []
+        try:
+            with requests.post(
+                "http://localhost:11434/api/chat",
+                json={'model': model, 'messages': messages, 'stream': True},
+                stream=True,
+                timeout=120
+            ) as r:
+                r.raise_for_status()
+                for line in r.iter_lines(decode_unicode=True):
+                    if not line:
+                        continue
+                    try:
+                        j = json.loads(line)
+                    except Exception:
+                        continue
+                    # Ollama stream can use 'message':{'content': delta} or 'response': delta
+                    delta = ''
+                    msg = j.get('message') or {}
+                    if isinstance(msg, dict) and 'content' in msg and msg['content']:
+                        delta = msg['content']
+                    elif 'response' in j and j['response']:
+                        delta = j['response']
+                    if delta:
+                        accumulated.append(delta)
+                        yield delta
+                    if j.get('done') is True:
+                        break
+        except Exception as e:
+            # surface minimal error to client stream
+            yield f"\n[error] {str(e)}"
+        # Update history after stream completes
+        answer = ''.join(accumulated)
+        sess['history'].append({'role': 'user', 'content': question})
+        sess['history'].append({'role': 'assistant', 'content': answer})
+
+    return Response(generate(), mimetype='text/plain')
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)

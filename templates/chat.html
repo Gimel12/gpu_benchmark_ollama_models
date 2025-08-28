@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Chat over Results</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="{{ url_for('static', filename='styles.css') }}" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <!-- Markdown renderer + sanitizer -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+    <style>
+      .chat-box { height: 50vh; overflow: auto; background: #f8f9fa; padding: 1rem; border-radius: .5rem; }
+      .msg-user { background: #d1e7dd; border-radius: .5rem; padding: .5rem .75rem; margin: .25rem 0; }
+      .msg-assistant { background: #e2e3e5; border-radius: .5rem; padding: .5rem .75rem; margin: .25rem 0; }
+      .msg-system { color: #6c757d; font-style: italic; margin: .25rem 0; }
+      /* Markdown styling inside assistant */
+      .msg-assistant table { width: 100%; border-collapse: collapse; margin: .25rem 0; }
+      .msg-assistant th, .msg-assistant td { border: 1px solid #ced4da; padding: .25rem .4rem; font-size: .92rem; }
+      .msg-assistant thead th { background: #f1f3f5; }
+      .msg-assistant code { background: #fff; border: 1px solid #dee2e6; border-radius: .25rem; padding: .1rem .25rem; }
+      .msg-assistant pre code { display: block; padding: .6rem; overflow-x: auto; }
+    </style>
+  </head>
+  <body>
+    <nav class="navbar navbar-expand-lg navbar-dark app-navbar">
+      <div class="container-fluid">
+        <a class="navbar-brand" href="/">BIZON GPU Benchmark</a>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+          <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+          <ul class="navbar-nav">
+            <li class="nav-item"><a class="nav-link" href="/">Home</a></li>
+            <li class="nav-item"><a class="nav-link" href="/run">Run Benchmark</a></li>
+            <li class="nav-item"><a class="nav-link" href="/results">Results</a></li>
+            <li class="nav-item"><a class="nav-link" href="/history">History</a></li>
+            <li class="nav-item"><a class="nav-link active" href="/chat">Chat</a></li>
+          </ul>
+          <ul class="navbar-nav ms-auto">
+            <li class="nav-item">
+              <a class="nav-link" href="https://bizon-tech.com/?utm_source=gpu-benchmark&utm_medium=app&utm_campaign=navbar-deals" target="_blank" rel="noopener">
+                <span class="badge bg-warning text-dark">Deals</span>
+              </a>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </nav>
+
+    <div class="container mt-4">
+      <h2>Chat over Benchmark Results</h2>
+
+      <div class="row g-3 align-items-end mt-1">
+        <div class="col-md-3">
+          <label class="form-label">Data Source</label>
+          <select id="source" class="form-select">
+            <option value="current">Current Results</option>
+            <option value="history">History File</option>
+            <option value="upload">Upload (CSV/JSON)</option>
+          </select>
+        </div>
+        <div class="col-md-4" id="historyFileWrap" style="display:none;">
+          <label class="form-label">History Filename</label>
+          <select id="historyFile" class="form-select"></select>
+        </div>
+        <div class="col-md-4" id="uploadWrap" style="display:none;">
+          <label class="form-label">Choose File (.csv or .json)</label>
+          <input id="uploadFile" type="file" class="form-control" accept=".csv,.json">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Model</label>
+          <select id="model" class="form-select"></select>
+          <div class="form-text">Default: gpt-oss:latest</div>
+        </div>
+        <div class="col-md-2 text-end">
+          <button id="loadBtn" class="btn btn-primary">Load Data</button>
+        </div>
+      </div>
+
+      <div id="loadAlert" class="alert alert-info mt-3 d-none">Loading…</div>
+      <div id="errorAlert" class="alert alert-danger mt-3 d-none"></div>
+
+      <div class="card mt-3">
+        <div class="card-body">
+          <div class="chat-box" id="chatBox">
+            <div class="msg-system">Load results above, then ask questions about the benchmark.</div>
+          </div>
+          <div class="input-group mt-3">
+            <input id="question" type="text" class="form-control" placeholder="Ask a question about the results…" disabled>
+            <button id="sendBtn" class="btn btn-success" disabled>Send</button>
+          </div>
+          <div id="typing" class="mt-2 d-none">
+            <span class="spinner-border spinner-border-sm text-secondary" role="status" aria-hidden="true"></span>
+            <span class="text-muted">Model is thinking…</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const sourceEl = document.getElementById('source');
+      const historyWrap = document.getElementById('historyFileWrap');
+      const historyEl = document.getElementById('historyFile');
+      const modelEl = document.getElementById('model');
+      const loadBtn = document.getElementById('loadBtn');
+      const loadAlert = document.getElementById('loadAlert');
+      const errAlert = document.getElementById('errorAlert');
+      const chatBox = document.getElementById('chatBox');
+      const qEl = document.getElementById('question');
+      const sendBtn = document.getElementById('sendBtn');
+      const uploadWrap = document.getElementById('uploadWrap');
+      const uploadFile = document.getElementById('uploadFile');
+      const typingEl = document.getElementById('typing');
+
+      let sessionId = null;
+
+      function showErr(msg){
+        errAlert.textContent = msg || 'Unknown error';
+        errAlert.classList.remove('d-none');
+      }
+      function clearErr(){ errAlert.classList.add('d-none'); }
+
+      function addMsg(role, text){
+        const div = document.createElement('div');
+        div.className = role === 'user' ? 'msg-user' : (role === 'assistant' ? 'msg-assistant' : 'msg-system');
+        if (role === 'assistant') {
+          const html = DOMPurify.sanitize(marked.parse(text || ''));
+          div.innerHTML = html;
+        } else {
+          div.textContent = text;
+        }
+        chatBox.appendChild(div);
+        chatBox.scrollTop = chatBox.scrollHeight;
+      }
+
+      sourceEl.addEventListener('change', ()=>{
+        const v = sourceEl.value;
+        historyWrap.style.display = (v === 'history') ? '' : 'none';
+        uploadWrap.style.display = (v === 'upload') ? '' : 'none';
+      });
+
+      async function loadHistoryList(){
+        try{
+          const r = await fetch('/history_list');
+          const j = await r.json();
+          historyEl.innerHTML = '';
+          (j.files || []).forEach(fn => {
+            const opt = document.createElement('option');
+            opt.value = fn; opt.textContent = fn;
+            historyEl.appendChild(opt);
+          });
+        }catch(e){ /* ignore */ }
+      }
+
+      async function loadModels(){
+        try{
+          const r = await fetch('/ollama/installed_models');
+          const j = await r.json();
+          const models = (j.models || []);
+          modelEl.innerHTML = '';
+          const def = 'gpt-oss:latest';
+          if (!models.includes(def)) models.unshift(def);
+          models.forEach(m => {
+            const opt = document.createElement('option');
+            opt.value = m; opt.textContent = m;
+            modelEl.appendChild(opt);
+          });
+          modelEl.value = def;
+        }catch(e){
+          modelEl.innerHTML = '<option value="gpt-oss:latest">gpt-oss:latest</option>'
+        }
+      }
+
+      async function loadData(){
+        clearErr();
+        loadAlert.classList.remove('d-none');
+        try{
+          const src = sourceEl.value;
+          let r;
+          if (src === 'upload'){
+            const f = uploadFile.files && uploadFile.files[0];
+            if (!f){ showErr('Please choose a .csv or .json file.'); return; }
+            const fd = new FormData();
+            fd.append('file', f, f.name);
+            r = await fetch('/qa/load_results', { method:'POST', body: fd });
+          } else {
+            const body = { source: src };
+            if (src === 'history') body.filename = historyEl.value;
+            r = await fetch('/qa/load_results', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+          }
+          const j = await r.json();
+          if (!j.ok){ showErr(j.error || 'Failed to load results'); return; }
+          sessionId = j.session_id;
+          addMsg('system', `Session loaded. Suggested model: ${j.suggested_model}`);
+          qEl.disabled = false; sendBtn.disabled = false;
+        }catch(e){ showErr(String(e)); }
+        finally{ loadAlert.classList.add('d-none'); }
+      }
+
+      async function sendQuestion(){
+        clearErr();
+        const q = (qEl.value || '').trim();
+        if (!q || !sessionId) return;
+        addMsg('user', q);
+        qEl.value = '';
+        sendBtn.disabled = true; qEl.disabled = true; typingEl.classList.remove('d-none');
+        try{
+          // create placeholder for streaming content
+          const placeholder = document.createElement('div');
+          placeholder.className = 'msg-assistant';
+          placeholder.innerHTML = '';
+          chatBox.appendChild(placeholder);
+          chatBox.scrollTop = chatBox.scrollHeight;
+
+          const r = await fetch('/qa/ask_stream', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ session_id: sessionId, question: q, model: modelEl.value }) });
+          if (!r.ok){
+            let err = 'Failed to get answer';
+            try{ const j = await r.json(); if (j && j.error) err = j.error; }catch{}
+            showErr(err);
+            placeholder.textContent = `[error] ${err}`;
+            return;
+          }
+          const reader = r.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+          while(true){
+            const {value, done} = await reader.read();
+            if (done) break;
+            const chunk = decoder.decode(value, {stream:true});
+            buffer += chunk;
+            const html = DOMPurify.sanitize(marked.parse(buffer));
+            placeholder.innerHTML = html;
+            chatBox.scrollTop = chatBox.scrollHeight;
+          }
+        }catch(e){ showErr(String(e)); }
+        finally{ sendBtn.disabled = false; qEl.disabled = false; typingEl.classList.add('d-none'); }
+      }
+
+      loadBtn.addEventListener('click', loadData);
+      sendBtn.addEventListener('click', sendQuestion);
+      qEl.addEventListener('keydown', (ev)=>{ if (ev.key === 'Enter') sendQuestion(); });
+
+      // init
+      loadHistoryList();
+      loadModels();
+    </script>
+    <script src="{{ url_for('static', filename='promo.js') }}"></script>
+  </body>
+</html>

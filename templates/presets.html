@@ -32,6 +32,19 @@
             <li class="nav-item">
               <a class="nav-link active" href="/presets">Presets</a>
             </li>
+            <li class="nav-item">
+              <a class="nav-link" href="/system">System Info</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" href="/chat">Chat</a>
+            </li>
+          </ul>
+          <ul class="navbar-nav ms-auto">
+            <li class="nav-item">
+              <a class="nav-link" href="https://bizon-tech.com/?utm_source=gpu-benchmark&utm_medium=app&utm_campaign=navbar-deals" target="_blank" rel="noopener">
+                <span class="badge bg-warning text-dark">Deals</span>
+              </a>
+            </li>
           </ul>
         </div>
       </div>
@@ -309,5 +322,6 @@
         modal.show();
       }
     </script>
+    <script src="{{ url_for('static', filename='promo.js') }}"></script>
   </body>
 </html>

@@ -1,0 +1,147 @@
+[
+  {
+    "model": "gpt-oss:latest",
+    "gpu_idx": 0,
+    "total_duration_seconds": 10.705564498901367,
+    "eval_count": 1690,
+    "eval_duration_ns": 10500619890,
+    "tokens_per_second": 160.94287934462125,
+    "tokens_generated": 1690,
+    "timestamp": "2025-08-28T14:10:34.081687",
+    "prompt": "write a python game of the snake game ",
+    "system_info": {
+      "platform": "Linux",
+      "platform_version": "#57-Ubuntu SMP PREEMPT_DYNAMIC Wed Feb 12 23:42:21 UTC 2025",
+      "processor": "x86_64"
+    },
+    "multi_gpu": false,
+    "gpu_avg_metrics": {
+      "gpu_name": "NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition",
+      "avg_temperature_c": 40.76923076923077,
+      "avg_utilization_percent": 63.0,
+      "avg_memory_utilization_percent": 14.426839110402815,
+      "avg_memory_used_mib": 14122.0,
+      "peak_memory_used_mib": 14122.0,
+      "memory_total_mib": 97887.0,
+      "avg_power_draw_w": 206.22846153846152,
+      "peak_power_draw_w": 246.49,
+      "power_limit_w": 300.0
+    }
+  },
+  {
+    "model": "gpt-oss:latest",
+    "gpu_idx": 0,
+    "total_duration_seconds": 11.866628646850586,
+    "eval_count": 1893,
+    "eval_duration_ns": 11639743363,
+    "tokens_per_second": 162.6324516756444,
+    "tokens_generated": 1893,
+    "timestamp": "2025-08-28T14:10:46.001500",
+    "prompt": "write a python game of the snake game ",
+    "system_info": {
+      "platform": "Linux",
+      "platform_version": "#57-Ubuntu SMP PREEMPT_DYNAMIC Wed Feb 12 23:42:21 UTC 2025",
+      "processor": "x86_64"
+    },
+    "multi_gpu": false,
+    "gpu_avg_metrics": {
+      "gpu_name": "NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition",
+      "avg_temperature_c": 47.0,
+      "avg_utilization_percent": 64.07142857142857,
+      "avg_memory_utilization_percent": 14.426839110402815,
+      "avg_memory_used_mib": 14122.0,
+      "peak_memory_used_mib": 14122.0,
+      "memory_total_mib": 97887.0,
+      "avg_power_draw_w": 240.04285714285717,
+      "peak_power_draw_w": 250.46,
+      "power_limit_w": 300.0
+    }
+  },
+  {
+    "model": "gpt-oss:latest",
+    "gpu_idx": 0,
+    "total_duration_seconds": 10.649468183517456,
+    "eval_count": 1694,
+    "eval_duration_ns": 10442850620,
+    "tokens_per_second": 162.2162435949888,
+    "tokens_generated": 1694,
+    "timestamp": "2025-08-28T14:10:56.703686",
+    "prompt": "write a python game of the snake game ",
+    "system_info": {
+      "platform": "Linux",
+      "platform_version": "#57-Ubuntu SMP PREEMPT_DYNAMIC Wed Feb 12 23:42:21 UTC 2025",
+      "processor": "x86_64"
+    },
+    "multi_gpu": false,
+    "gpu_avg_metrics": {
+      "gpu_name": "NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition",
+      "avg_temperature_c": 52.15384615384615,
+      "avg_utilization_percent": 65.6923076923077,
+      "avg_memory_utilization_percent": 14.426839110402815,
+      "avg_memory_used_mib": 14122.0,
+      "peak_memory_used_mib": 14122.0,
+      "memory_total_mib": 97887.0,
+      "avg_power_draw_w": 243.5223076923077,
+      "peak_power_draw_w": 252.15,
+      "power_limit_w": 300.0
+    }
+  },
+  {
+    "model": "gpt-oss:latest",
+    "gpu_idx": 0,
+    "total_duration_seconds": 12.86603569984436,
+    "eval_count": 2043,
+    "eval_duration_ns": 12632590671,
+    "tokens_per_second": 161.72454670679798,
+    "tokens_generated": 2043,
+    "timestamp": "2025-08-28T14:11:09.621413",
+    "prompt": "write a python game of the snake game ",
+    "system_info": {
+      "platform": "Linux",
+      "platform_version": "#57-Ubuntu SMP PREEMPT_DYNAMIC Wed Feb 12 23:42:21 UTC 2025",
+      "processor": "x86_64"
+    },
+    "multi_gpu": false,
+    "gpu_avg_metrics": {
+      "gpu_name": "NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition",
+      "avg_temperature_c": 57.0,
+      "avg_utilization_percent": 66.53333333333333,
+      "avg_memory_utilization_percent": 14.426839110402817,
+      "avg_memory_used_mib": 14122.0,
+      "peak_memory_used_mib": 14122.0,
+      "memory_total_mib": 97887.0,
+      "avg_power_draw_w": 246.47133333333332,
+      "peak_power_draw_w": 259.43,
+      "power_limit_w": 300.0
+    }
+  },
+  {
+    "model": "gpt-oss:latest",
+    "gpu_idx": 0,
+    "total_duration_seconds": 11.1603684425354,
+    "eval_count": 1792,
+    "eval_duration_ns": 10975303006,
+    "tokens_per_second": 163.27567439553567,
+    "tokens_generated": 1792,
+    "timestamp": "2025-08-28T14:11:20.834899",
+    "prompt": "write a python game of the snake game ",
+    "system_info": {
+      "platform": "Linux",
+      "platform_version": "#57-Ubuntu SMP PREEMPT_DYNAMIC Wed Feb 12 23:42:21 UTC 2025",
+      "processor": "x86_64"
+    },
+    "multi_gpu": false,
+    "gpu_avg_metrics": {
+      "gpu_name": "NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition",
+      "avg_temperature_c": 61.46153846153846,
+      "avg_utilization_percent": 67.6923076923077,
+      "avg_memory_utilization_percent": 14.426839110402815,
+      "avg_memory_used_mib": 14122.0,
+      "peak_memory_used_mib": 14122.0,
+      "memory_total_mib": 97887.0,
+      "avg_power_draw_w": 250.7538461538461,
+      "peak_power_draw_w": 262.66,
+      "power_limit_w": 300.0
+    }
+  }
+]
