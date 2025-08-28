@@ -84,11 +84,8 @@
   // Init
   document.addEventListener('DOMContentLoaded', () => {
     try{
+      // Beta branch: show only the banner; disable recurring modal popups
       createBanner();
-      createModal();
-      // show first after 60s, then every 60s
-      setTimeout(showModalIfNeeded, MODAL_INTERVAL_MS);
-      setInterval(showModalIfNeeded, MODAL_INTERVAL_MS);
     }catch{}
   });
 })();
