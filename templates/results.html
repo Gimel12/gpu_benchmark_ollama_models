@@ -360,103 +360,59 @@
             }
           });
           
-          // Temperature Chart
-          var tempCtx = document.getElementById('tempChart').getContext('2d');
-          var tempData = chartResults.map(function(r) { return getGpuMetric(r, 'temperature'); });
-          
-          new Chart(tempCtx, {
-            type: 'bar',
-            data: {
-              labels: perfLabels,
-              datasets: [{
-                label: 'Temperature (°C)',
-                data: tempData,
-                backgroundColor: 'rgba(255, 99, 132, 0.7)'
-              }]
-            },
-            options: {
-              responsive: true,
-              plugins: {
-                title: {
-                  display: true,
-                  text: 'GPU Temperature (°C)'
-                }
-              }
-            }
-          });
-          
-          // Utilization Chart
-          var utilCtx = document.getElementById('utilizationChart').getContext('2d');
-          var utilData = chartResults.map(function(r) { return getGpuMetric(r, 'utilization'); });
-          
-          new Chart(utilCtx, {
-            type: 'bar',
-            data: {
-              labels: perfLabels,
-              datasets: [{
-                label: 'Utilization (%)',
-                data: utilData,
-                backgroundColor: 'rgba(255, 205, 86, 0.7)'
-              }]
-            },
-            options: {
-              responsive: true,
-              plugins: {
-                title: {
-                  display: true,
-                  text: 'GPU Utilization (%)'
-                }
-              }
-            }
-          });
-          
-          // Memory Chart
-          var memCtx = document.getElementById('memoryChart').getContext('2d');
-          var memData = chartResults.map(function(r) { return getGpuMetric(r, 'memory'); });
-          
-          new Chart(memCtx, {
-            type: 'bar',
-            data: {
-              labels: perfLabels,
-              datasets: [{
-                label: 'Memory Used (GiB)',
-                data: memData,
-                backgroundColor: 'rgba(75, 192, 192, 0.7)'
-              }]
-            },
-            options: {
-              responsive: true,
-              plugins: {
-                title: {
-                  display: true,
-                  text: 'GPU Memory Used (GiB)'
-                }
-              }
-            }
-          });
-          
-          // Power Chart
-          var powerCtx = document.getElementById('powerChart').getContext('2d');
-          var powerData = chartResults.map(function(r) { return getGpuMetric(r, 'power'); });
-          
-          new Chart(powerCtx, {
-            type: 'bar',
-            data: {
-              labels: perfLabels,
-              datasets: [{
-                label: 'Power Draw (W)',
-                data: powerData,
-                backgroundColor: 'rgba(153, 102, 255, 0.7)'
-              }]
-            },
-            options: {
-              responsive: true,
-              plugins: {
-                title: {
-                  display: true,
-                  text: 'GPU Power Draw (W)'
-                }
-              }
+          // Lazy-init charts for tabs that start hidden to avoid zero-size rendering
+          var tempChart = null, utilChart = null, memChart = null, powerChart = null;
+          function ensureTempChart(){
+            if (tempChart) { tempChart.resize(); return; }
+            var tempCtx = document.getElementById('tempChart').getContext('2d');
+            var tempData = chartResults.map(function(r) { return getGpuMetric(r, 'temperature'); });
+            tempChart = new Chart(tempCtx, {
+              type: 'bar',
+              data: { labels: perfLabels, datasets: [{ label: 'Temperature (°C)', data: tempData, backgroundColor: 'rgba(255, 99, 132, 0.7)' }] },
+              options: { responsive: true, plugins: { title: { display: true, text: 'GPU Temperature (°C)' } } }
+            });
+          }
+          function ensureUtilChart(){
+            if (utilChart) { utilChart.resize(); return; }
+            var utilCtx = document.getElementById('utilizationChart').getContext('2d');
+            var utilData = chartResults.map(function(r) { return getGpuMetric(r, 'utilization'); });
+            utilChart = new Chart(utilCtx, {
+              type: 'bar',
+              data: { labels: perfLabels, datasets: [{ label: 'Utilization (%)', data: utilData, backgroundColor: 'rgba(255, 205, 86, 0.7)' }] },
+              options: { responsive: true, plugins: { title: { display: true, text: 'GPU Utilization (%)' } } }
+            });
+          }
+          function ensureMemChart(){
+            if (memChart) { memChart.resize(); return; }
+            var memCtx = document.getElementById('memoryChart').getContext('2d');
+            var memData = chartResults.map(function(r) { return getGpuMetric(r, 'memory'); });
+            memChart = new Chart(memCtx, {
+              type: 'bar',
+              data: { labels: perfLabels, datasets: [{ label: 'Memory Used (GiB)', data: memData, backgroundColor: 'rgba(75, 192, 192, 0.7)' }] },
+              options: { responsive: true, plugins: { title: { display: true, text: 'GPU Memory Used (GiB)' } } }
+            });
+          }
+          function ensurePowerChart(){
+            if (powerChart) { powerChart.resize(); return; }
+            var powerCtx = document.getElementById('powerChart').getContext('2d');
+            var powerData = chartResults.map(function(r) { return getGpuMetric(r, 'power'); });
+            powerChart = new Chart(powerCtx, {
+              type: 'bar',
+              data: { labels: perfLabels, datasets: [{ label: 'Power Draw (W)', data: powerData, backgroundColor: 'rgba(153, 102, 255, 0.7)' }] },
+              options: { responsive: true, plugins: { title: { display: true, text: 'GPU Power Draw (W)' } } }
+            });
+          }
+
+          // Create the currently visible Performance chart immediately (already created above)
+          // Initialize others on tab show
+          var chartTabsEl = document.getElementById('chartTabs');
+          chartTabsEl.addEventListener('shown.bs.tab', function (event) {
+            var target = event.target.getAttribute('data-bs-target');
+            switch(target){
+              case '#temperature': ensureTempChart(); break;
+              case '#utilization': ensureUtilChart(); break;
+              case '#memory': ensureMemChart(); break;
+              case '#power': ensurePowerChart(); break;
             }
           });
           
