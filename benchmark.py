@@ -152,7 +152,8 @@ def get_gpu_metrics_nvidia(gpu_idx: int) -> dict:
         result = subprocess.run(
             [
                 "nvidia-smi",
-                f"--query-gpu=name,temperature.gpu,utilization.gpu,utilization.memory,power.draw,power.limit",
+                # Query absolute memory used/total instead of percent; we'll compute percent ourselves.
+                f"--query-gpu=name,temperature.gpu,utilization.gpu,memory.used,memory.total,power.draw,power.limit",
                 "--format=csv,noheader,nounits",
                 f"--id={gpu_idx}"
             ],
@@ -163,14 +164,24 @@ def get_gpu_metrics_nvidia(gpu_idx: int) -> dict:
         
         # Parse the output
         values = result.stdout.strip().split(", ")
-        if len(values) >= 6:
+        if len(values) >= 7:
+            name = values[0].strip()
+            temp_c = float(values[1])
+            util_pct = float(values[2])
+            mem_used_mib = float(values[3])
+            mem_total_mib = float(values[4]) if float(values[4]) > 0 else None
+            power_w = float(values[5])
+            power_limit_w = float(values[6])
+            mem_util_pct = (mem_used_mib / mem_total_mib * 100.0) if mem_total_mib else 0.0
             return {
-                "gpu_name": values[0].strip(),
-                "temperature_c": float(values[1]),
-                "utilization_percent": float(values[2]),
-                "memory_utilization_percent": float(values[3]),
-                "power_draw_w": float(values[4]),
-                "power_limit_w": float(values[5])
+                "gpu_name": name,
+                "temperature_c": temp_c,
+                "utilization_percent": util_pct,
+                "memory_used_mib": mem_used_mib,
+                "memory_total_mib": mem_total_mib,
+                "memory_utilization_percent": mem_util_pct,
+                "power_draw_w": power_w,
+                "power_limit_w": power_limit_w,
             }
     except (subprocess.SubprocessError, ValueError, IndexError) as e:
         print(f"Error getting GPU metrics: {e}")
@@ -253,6 +264,8 @@ def run_inference(
         if payload.get("stream", False):
             # Handle streaming response
             import json as _json
+            last_sample_time = 0.0
+            sample_interval = 1.0  # seconds
             for line in response.iter_lines():
                 if line:
                     chunk = _json.loads(line.decode("utf-8"))
@@ -261,6 +274,15 @@ def run_inference(
                         eval_count = chunk["eval_count"]
                     if "eval_duration" in chunk:
                         eval_duration = chunk["eval_duration"]
+                # Periodically sample GPU metrics during generation
+                if platform.system() == "Linux" and gpus_to_sample:
+                    now = time.time()
+                    if now - last_sample_time >= sample_interval:
+                        for idx in gpus_to_sample:
+                            m = get_gpu_metrics_nvidia(idx)
+                            if m:
+                                gpu_metrics_samples.append(m)
+                        last_sample_time = now
             response_json = {
                 "response": generated_text,
                 "eval_count": eval_count,
@@ -297,19 +319,30 @@ def run_inference(
         # Aggregate GPU metrics if available
         gpu_avg_metrics = None
         if gpu_metrics_samples:
-            avg_temp = sum(m.get("temperature_c", 0) for m in gpu_metrics_samples) / len(gpu_metrics_samples)
-            avg_util = sum(m.get("utilization_percent", 0) for m in gpu_metrics_samples) / len(gpu_metrics_samples)
-            avg_mem_util = sum(m.get("memory_utilization_percent", 0) for m in gpu_metrics_samples) / len(gpu_metrics_samples)
-            avg_power = sum(m.get("power_draw_w", 0) for m in gpu_metrics_samples) / len(gpu_metrics_samples)
-            max_power = max(m.get("power_limit_w", 0) for m in gpu_metrics_samples)  # Use TDP (power limit)
+            n = len(gpu_metrics_samples)
+            avg_temp = sum(m.get("temperature_c", 0) for m in gpu_metrics_samples) / n
+            avg_util = sum(m.get("utilization_percent", 0) for m in gpu_metrics_samples) / n
+            avg_mem_util = sum(m.get("memory_utilization_percent", 0) for m in gpu_metrics_samples) / n
+            avg_mem_used_mib = sum(m.get("memory_used_mib", 0) for m in gpu_metrics_samples) / n
+            peak_mem_used_mib = max(m.get("memory_used_mib", 0) for m in gpu_metrics_samples)
+            # memory_total_mib might vary if sampling multiple GPUs (multi-GPU); take max as capacity indicator
+            mem_total_mib_vals = [m.get("memory_total_mib") for m in gpu_metrics_samples if m.get("memory_total_mib")]
+            mem_total_mib = max(mem_total_mib_vals) if mem_total_mib_vals else None
+            avg_power = sum(m.get("power_draw_w", 0) for m in gpu_metrics_samples) / n
+            peak_power_draw_w = max(m.get("power_draw_w", 0) for m in gpu_metrics_samples)
+            power_limit_max = max(m.get("power_limit_w", 0) for m in gpu_metrics_samples)  # TDP (power limit)
             gpu_name = gpu_metrics_samples[0].get("gpu_name") if gpu_metrics_samples[0].get("gpu_name") else None
             gpu_avg_metrics = {
                 "gpu_name": gpu_name,
                 "avg_temperature_c": avg_temp,
                 "avg_utilization_percent": avg_util,
                 "avg_memory_utilization_percent": avg_mem_util,
+                "avg_memory_used_mib": avg_mem_used_mib,
+                "peak_memory_used_mib": peak_mem_used_mib,
+                "memory_total_mib": mem_total_mib,
                 "avg_power_draw_w": avg_power,
-                "max_power_w": max_power  # Rename to max_power_w for clarity
+                "peak_power_draw_w": peak_power_draw_w,
+                "power_limit_w": power_limit_max
             }
 
         # Create result dictionary

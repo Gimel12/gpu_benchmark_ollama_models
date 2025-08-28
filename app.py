@@ -422,21 +422,28 @@ def export_csv(filename):
     
     # Write header
     header = ['Model', 'GPU', 'Tokens/sec', 'Duration (s)', 'Prompt', 
-              'Avg Temp (°C)', 'Avg Util (%)', 'Avg Mem (%)', 'Avg Power (W)', 'Timestamp']
+              'Avg Temp (°C)', 'Avg Util (%)', 'Avg Mem (GiB)', 'Avg Power (W)', 'Timestamp']
     writer.writerow(header)
     
     # Write data rows
     for r in results:
+        gpu_metrics = r.get('gpu_avg_metrics', {}) or {}
+        avg_mem_gib = ''
+        if 'avg_memory_used_mib' in gpu_metrics and gpu_metrics.get('avg_memory_used_mib') is not None:
+            try:
+                avg_mem_gib = float(gpu_metrics.get('avg_memory_used_mib')) / 1024.0
+            except Exception:
+                avg_mem_gib = ''
         row = [
             r.get('model', ''),
             r.get('gpu_idx', 'CPU'),
             r.get('tokens_per_second', ''),
             r.get('total_duration_seconds', ''),
             r.get('prompt', ''),
-            r.get('gpu_avg_metrics', {}).get('avg_temperature_c', ''),
-            r.get('gpu_avg_metrics', {}).get('avg_utilization_percent', ''),
-            r.get('gpu_avg_metrics', {}).get('avg_memory_utilization_percent', ''),
-            r.get('gpu_avg_metrics', {}).get('avg_power_draw_w', ''),
+            gpu_metrics.get('avg_temperature_c', ''),
+            gpu_metrics.get('avg_utilization_percent', ''),
+            avg_mem_gib,
+            gpu_metrics.get('avg_power_draw_w', ''),
             r.get('timestamp', '')
         ]
         writer.writerow(row)

@@ -5,11 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Benchmark Results</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="{{ url_for('static', filename='styles.css') }}" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   </head>
   <body>
-    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+    <nav class="navbar navbar-expand-lg navbar-dark app-navbar">
       <div class="container-fluid">
         <a class="navbar-brand" href="/">BIZON GPU Benchmark</a>
         <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
@@ -36,7 +37,7 @@
     <div class="container mt-5">
       <h2>Benchmark Results {% if history %}(History View){% endif %}</h2>
       {% if results %}
-        <div class="btn-toolbar mb-3">
+        <div class="btn-toolbar mb-3 align-items-center justify-content-between">
           <div class="btn-group me-2">
             {% if not history %}
             <a href="/download" class="btn btn-primary">Download JSON</a>
@@ -53,8 +54,36 @@
             </button>
           </div>
           {% endif %}
+          <div class="btn-group">
+            <button id="summaryViewBtn" type="button" class="btn btn-outline-secondary active">Summary</button>
+            <button id="detailedViewBtn" type="button" class="btn btn-outline-secondary">Detailed</button>
+          </div>
         </div>
-        <div class="table-responsive">
+        <!-- Summary (grouped) table -->
+        <div id="summaryContainer" class="table-responsive">
+          <table class="table table-striped align-middle">
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th>GPU</th>
+                <th>GPU Name</th>
+                <th>Runs</th>
+                <th>Avg TPS</th>
+                <th>Min TPS</th>
+                <th>Max TPS</th>
+                <th>Avg Duration (s)</th>
+                <th>Avg Temp (°C)</th>
+                <th>Avg Util (%)</th>
+                <th>Avg Mem (GiB)</th>
+                <th>Avg Power (W)</th>
+              </tr>
+            </thead>
+            <tbody id="summaryTbody"></tbody>
+          </table>
+        </div>
+
+        <!-- Detailed (per-run) table -->
+        <div id="detailedContainer" class="table-responsive" style="display:none;">
           <table class="table table-striped">
             <thead>
               <tr>
@@ -67,13 +96,13 @@
                 <th>Prompt</th>
                 <th>Avg Temp (°C)</th>
                 <th>Avg Util (%)</th>
-                <th>Avg Mem (%)</th>
+                <th>Avg Mem (GiB)</th>
                 <th>Avg Power (W)</th>
                 <th>Max Power (W) (TDP)</th>
                 <th>Timestamp</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody id="detailedTbody">
               {% for r in results %}
               <tr>
                 <td>{{ r.model }}</td>
@@ -91,9 +120,15 @@
                 <td>{{ r.prompt }}</td>
                 <td>{{ r.gpu_avg_metrics.avg_temperature_c|round(1) if r.gpu_avg_metrics and r.gpu_avg_metrics.avg_temperature_c else '' }}</td>
                 <td>{{ r.gpu_avg_metrics.avg_utilization_percent|round(1) if r.gpu_avg_metrics and r.gpu_avg_metrics.avg_utilization_percent else '' }}</td>
-                <td>{{ r.gpu_avg_metrics.avg_memory_utilization_percent|round(1) if r.gpu_avg_metrics and r.gpu_avg_metrics.avg_memory_utilization_percent else '' }}</td>
+                <td>
+                  {% if r.gpu_avg_metrics and r.gpu_avg_metrics.avg_memory_used_mib %}
+                    {{ (r.gpu_avg_metrics.avg_memory_used_mib / 1024)|round(2) }}
+                  {% else %}
+                    
+                  {% endif %}
+                </td>
                 <td>{{ r.gpu_avg_metrics.avg_power_draw_w|round(1) if r.gpu_avg_metrics and r.gpu_avg_metrics.avg_power_draw_w else '' }}</td>
-                <td>{{ r.gpu_avg_metrics.max_power_w if r.gpu_avg_metrics is defined and r.gpu_avg_metrics.max_power_w is defined else 'N/A' }}</td>
+                <td>{{ r.gpu_avg_metrics.power_limit_w if r.gpu_avg_metrics is defined and r.gpu_avg_metrics.power_limit_w is defined else 'N/A' }}</td>
                 <td>{{ r.timestamp|format_timestamp }}</td>
               </tr>
               {% endfor %}
@@ -159,7 +194,7 @@
                     <option value="total_duration_seconds">Duration (s)</option>
                     <option value="temperature">Temperature (°C)</option>
                     <option value="utilization">Utilization (%)</option>
-                    <option value="memory">Memory Usage (%)</option>
+                    <option value="memory">Memory Used (GiB)</option>
                     <option value="power">Power Draw (W)</option>
                   </select>
                 </div>
@@ -179,6 +214,94 @@
           // Parse the results data
           var chartResultsJson = '{{ results|tojson|safe }}';
           var chartResults = JSON.parse(chartResultsJson);
+
+          // View toggle logic
+          const summaryBtn = document.getElementById('summaryViewBtn');
+          const detailedBtn = document.getElementById('detailedViewBtn');
+          const summaryContainer = document.getElementById('summaryContainer');
+          const detailedContainer = document.getElementById('detailedContainer');
+
+          function setView(view) {
+            if (view === 'summary') {
+              summaryContainer.style.display = '';
+              detailedContainer.style.display = 'none';
+              summaryBtn.classList.add('active');
+              detailedBtn.classList.remove('active');
+            } else {
+              summaryContainer.style.display = 'none';
+              detailedContainer.style.display = '';
+              summaryBtn.classList.remove('active');
+              detailedBtn.classList.add('active');
+            }
+          }
+
+          summaryBtn.addEventListener('click', function(){ setView('summary'); });
+          detailedBtn.addEventListener('click', function(){ setView('detailed'); });
+
+          // Group by Model + GPU and compute aggregates
+          function safeNum(v) { return (v === null || v === undefined) ? null : Number(v); }
+          function addAgg(agg, key, val){ if(val!==null && !isNaN(val)){ agg[key].push(val);} }
+          function avg(arr){ return arr.length ? arr.reduce((a,b)=>a+b,0)/arr.length : null; }
+          function min(arr){ return arr.length ? Math.min(...arr) : null; }
+          function max(arr){ return arr.length ? Math.max(...arr) : null; }
+
+          const groups = {};
+          chartResults.forEach(r => {
+            const gpuLabel = r.multi_gpu ? `Multi: ${r.gpu_idx}` : (r.gpu_idx === null ? 'CPU' : String(r.gpu_idx));
+            const key = `${r.model}__${gpuLabel}`;
+            if(!groups[key]){
+              groups[key] = {
+                model: r.model,
+                gpu: gpuLabel,
+                gpu_name: r.gpu_avg_metrics && r.gpu_avg_metrics.gpu_name ? r.gpu_avg_metrics.gpu_name : '',
+                tps: [], dur: [], temp: [], util: [], mem_gib: [], power: [], runs: 0
+              };
+            }
+            const g = groups[key];
+            g.runs += 1;
+            addAgg(g, 'tps', safeNum(r.tokens_per_second));
+            addAgg(g, 'dur', safeNum(r.total_duration_seconds));
+            if(r.gpu_avg_metrics){
+              addAgg(g, 'temp', safeNum(r.gpu_avg_metrics.avg_temperature_c));
+              addAgg(g, 'util', safeNum(r.gpu_avg_metrics.avg_utilization_percent));
+              // convert MiB -> GiB for summary
+              if (r.gpu_avg_metrics.avg_memory_used_mib !== undefined && r.gpu_avg_metrics.avg_memory_used_mib !== null){
+                addAgg(g, 'mem_gib', safeNum(r.gpu_avg_metrics.avg_memory_used_mib) / 1024.0);
+              }
+              addAgg(g, 'power', safeNum(r.gpu_avg_metrics.avg_power_draw_w));
+            }
+          });
+
+          // Render summary table
+          const summaryTbody = document.getElementById('summaryTbody');
+          summaryTbody.innerHTML = '';
+          Object.values(groups).forEach(g => {
+            const row = document.createElement('tr');
+            function fmt(v, d=2){ return (v===null||isNaN(v)) ? '' : Number(v).toFixed(d); }
+            const cells = [
+              g.model,
+              g.gpu,
+              g.gpu_name,
+              g.runs,
+              fmt(avg(g.tps)),
+              fmt(min(g.tps)),
+              fmt(max(g.tps)),
+              fmt(avg(g.dur)),
+              fmt(avg(g.temp),1),
+              fmt(avg(g.util),1),
+              fmt(avg(g.mem_gib),2),
+              fmt(avg(g.power),1)
+            ];
+            cells.forEach((c,i)=>{
+              const td = document.createElement('td');
+              td.textContent = c;
+              row.appendChild(td);
+            });
+            summaryTbody.appendChild(row);
+          });
+
+          // Default to Summary view initially
+          setView('summary');
           
           // Helper function to generate labels
           function generateLabels(results) {
@@ -200,7 +323,10 @@
               case 'utilization':
                 return result.gpu_avg_metrics.avg_utilization_percent;
               case 'memory':
-                return result.gpu_avg_metrics.avg_memory_utilization_percent;
+                if (result.gpu_avg_metrics.avg_memory_used_mib != null) {
+                  return result.gpu_avg_metrics.avg_memory_used_mib / 1024.0; // GiB
+                }
+                return null;
               case 'power':
                 return result.gpu_avg_metrics.avg_power_draw_w;
               default:
@@ -293,7 +419,7 @@
             data: {
               labels: perfLabels,
               datasets: [{
-                label: 'Memory Usage (%)',
+                label: 'Memory Used (GiB)',
                 data: memData,
                 backgroundColor: 'rgba(75, 192, 192, 0.7)'
               }]
@@ -303,7 +429,7 @@
               plugins: {
                 title: {
                   display: true,
-                  text: 'GPU Memory Usage (%)'
+                  text: 'GPU Memory Used (GiB)'
                 }
               }
             }
@@ -426,7 +552,7 @@
                 metricDisplayName = 'Utilization (%)';
                 break;
               case 'memory':
-                metricDisplayName = 'Memory Usage (%)';
+                metricDisplayName = 'Memory Used (GiB)';
                 break;
               case 'power':
                 metricDisplayName = 'Power Draw (W)';
